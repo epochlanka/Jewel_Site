@@ -259,4 +259,6 @@ model ShopSettings {
   bankEnabled      Boolean @default(true)
   onlineEnabled    Boolean @default(false)
   pickupEnabled    Boolean @default(true)
+  themeMode        String  @default("system")
+  themeAccent      String  @default("emerald")
 }

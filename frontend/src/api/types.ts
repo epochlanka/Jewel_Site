@@ -46,6 +46,7 @@ export type Settings = {
   shopName: string; tagline: string; phone: string; whatsapp: string; email: string; address: string;
   deliveryFee: number; freeDeliveryOver: number | null; bankDetails: string;
   codEnabled: boolean; bankEnabled: boolean; onlineEnabled: boolean; pickupEnabled: boolean;
+  themeMode: "system" | "light" | "dark"; themeAccent: "emerald" | "gold" | "rose" | "blue";
 };
 
 export type Offer = {

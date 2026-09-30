@@ -57,7 +57,8 @@ r.get("/mine", requireAuth, ah(async (req, res) => {
 r.get("/:id", ah(async (req, res) => {
   const j = await db.tryOn.findUnique({ where: { id: req.params.id }, select: { id: true, status: true, resultUrl: true, error: true, items: { select: { productId: true } } } });
   if (!j) throw new HttpError(404, "Try-on not found");
-  res.json({ ...j, error: j.error ? "We couldn't create a preview from this photo. Try a clear, front-facing photo with good light." : null });
+  const configError = j.error?.includes("AI try-on isn't configured.") ? j.error : null;
+  res.json({ ...j, error: configError ?? (j.error ? "We couldn't create a preview from this photo. Try a clear, front-facing photo with good light." : null) });
 }));
 
 export default r;

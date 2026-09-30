@@ -65,9 +65,33 @@ export default function AdminOrderDetail() {
         </div>
       </div>
 
-      <div className="print-only"><strong>{s.shopName}</strong>{s.phone && <><br />{s.phone}</>}{s.address && <><br />{s.address}</>}</div>
+      <section className="packing-slip print-only">
+        <header className="packing-slip-head">
+          <div>
+            <h1>{s.shopName}</h1>
+            {s.phone && <p>{s.phone}</p>}
+            {s.address && <p>{s.address}</p>}
+          </div>
+          <div className="packing-slip-order">
+            <strong>Packing slip</strong>
+            <span>{o.orderNo}</span>
+            <span>{dateTime(o.createdAt)}</span>
+          </div>
+        </header>
+        <section className="packing-slip-customer">
+          <strong>{o.deliveryMethod === "PICKUP" ? "Customer" : "Ship to"}</strong>
+          <span>{o.fullName}</span>
+          <span>{o.mobile}</span>
+          {o.deliveryMethod === "DELIVERY" && <span>{[o.address, o.city, o.postalCode].filter(Boolean).join(", ")}</span>}
+        </section>
+        <table className="packing-slip-items">
+          <thead><tr><th>Product</th><th>Qty</th></tr></thead>
+          <tbody>{o.items.map((i) => <tr key={i.id}><td>{i.name}</td><td>{i.qty}</td></tr>)}</tbody>
+        </table>
+        {o.note && <p className="packing-slip-note"><strong>Note:</strong> {o.note}</p>}
+      </section>
 
-      <div className="detail-grid">
+      <div className="detail-grid no-print">
         <div className="stack">
           <section className="panel">
             <div className="panel-head"><h2>Items</h2><span className="panel-meta">{o.items.reduce((n, i) => n + i.qty, 0)} pieces</span></div>

@@ -21,6 +21,8 @@ export default function SettingsPage() {
       deliveryFee: Number(f.get("deliveryFee") || 0),
       freeDeliveryOver: f.get("freeDeliveryOver") ? Number(f.get("freeDeliveryOver")) : null,
       codEnabled: !!f.get("codEnabled"), bankEnabled: !!f.get("bankEnabled"), onlineEnabled: !!f.get("onlineEnabled"), pickupEnabled: !!f.get("pickupEnabled"),
+      themeMode: text("themeMode") as "system" | "light" | "dark",
+      themeAccent: text("themeAccent") as "emerald" | "gold" | "rose" | "blue",
     };
     if (!body.codEnabled && !body.bankEnabled && !body.onlineEnabled) { setErr("Turn on at least one payment method so customers can order."); return; }
     setBusy(true); setErr("");
@@ -29,7 +31,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <form className="admin-page" onSubmit={save} key={s.shopName + s.phone}>
+    <form className="admin-page" onSubmit={save} key={s.shopName + s.phone + s.themeMode + s.themeAccent}>
       <div className="admin-head"><div><h1>Settings</h1><p>These details appear across the shop, at checkout and in messages to customers.</p></div></div>
       {err && <p className="form-error" role="alert">{err}</p>}
 
@@ -60,6 +62,11 @@ export default function SettingsPage() {
           </section>
         </div>
         <div className="admin-form-side">
+          <section className="panel form">
+            <h2 style={{ fontSize: 22 }}>Appearance</h2>
+            <label className="field"><span className="field-label">Colour mode</span><select name="themeMode" defaultValue={s.themeMode}><option value="system">Use visitor’s device setting</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+            <label className="field"><span className="field-label">Accent colour</span><select name="themeAccent" defaultValue={s.themeAccent}><option value="emerald">Emerald</option><option value="gold">Gold</option><option value="rose">Rose</option><option value="blue">Blue</option></select><span className="field-hint">Changes buttons, links and highlights across the shop.</span></label>
+          </section>
           <section className="panel form">
             <h2 style={{ fontSize: 22 }}>Delivery</h2>
             <label className="field"><span className="field-label">Delivery fee (LKR)</span><input name="deliveryFee" type="number" min={0} step={1} required defaultValue={s.deliveryFee} /></label>

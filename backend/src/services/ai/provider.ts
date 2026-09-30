@@ -65,9 +65,8 @@ async function saveResult(url: string) {
 }
 
 class MockProvider implements TryOnProvider {
-  async generate(r: TryOnRequest) {
-    await new Promise((ok) => setTimeout(ok, 2000));
-    return r.personImageUrl; // returns input so the UI flow works without an AI key
+  async generate(_r: TryOnRequest): Promise<string> {
+    throw new Error("AI try-on isn't configured. Add FAL_KEY to backend/.env to generate previews.");
   }
 }
 

@@ -1,4 +1,4 @@
-import { DragEvent, useEffect, useRef, useState } from "react";
+import { CSSProperties, DragEvent, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { AiModel, Product, TryOnJob } from "../api/types";
@@ -8,7 +8,7 @@ import { useToast } from "../context/ToastContext";
 import Icon from "../components/Icon";
 import { EmptyState, PageLoading, Price, ProductImage } from "../components/ui";
 
-type Mode = "AI_MODEL" | "UPLOAD";
+type Mode = "AI_MODEL" | "UPLOAD" | "LIVE";
 const MAX_MB = 8;
 
 export default function TryOn() {
@@ -24,10 +24,15 @@ export default function TryOn() {
   const [photo, setPhoto] = useState<File>();
   const [preview, setPreview] = useState<string>();
   const [over, setOver] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [overlayScale, setOverlayScale] = useState(100);
+  const [overlayOffset, setOverlayOffset] = useState(0);
   const [job, setJob] = useState<TryOnJob | null>(null);
   const [err, setErr] = useState("");
   const timer = useRef<number>();
   const started = useRef(0);
+  const video = useRef<HTMLVideoElement>(null);
+  const camera = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     if (!ids.length) { setItems([]); return; }
@@ -37,6 +42,10 @@ export default function TryOn() {
 
   useEffect(() => { if (mode === "AI_MODEL" && !models) api.aiModels().then(setModels).catch(() => setModels([])); }, [mode, models]);
   useEffect(() => () => { window.clearInterval(timer.current); }, []);
+  useEffect(() => () => camera.current?.getTracks().forEach((track) => track.stop()), []);
+  useEffect(() => {
+    if (cameraOn && video.current && camera.current) video.current.srcObject = camera.current;
+  }, [cameraOn]);
   useEffect(() => {
     if (!photo) { setPreview(undefined); return; }
     const url = URL.createObjectURL(photo);
@@ -61,6 +70,48 @@ export default function TryOn() {
     setPhoto(f);
   };
   const onDrop = (e: DragEvent) => { e.preventDefault(); setOver(false); pickFile(e.dataTransfer.files[0]); };
+
+  const startCamera = async (): Promise<boolean> => {
+    setErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+      camera.current?.getTracks().forEach((track) => track.stop());
+      camera.current = stream;
+      setCameraOn(true);
+      return true;
+    } catch {
+      setErr("We couldn't access your camera. Allow camera access or choose a photo instead.");
+      return false;
+    }
+  };
+
+  const startLivePreview = async () => {
+    if (await startCamera()) setMode("LIVE");
+  };
+
+  const stopCamera = () => {
+    camera.current?.getTracks().forEach((track) => track.stop());
+    camera.current = null;
+    setCameraOn(false);
+  };
+
+  const capturePhoto = () => {
+    const el = video.current;
+    if (!el?.videoWidth || !el.videoHeight) { setErr("The camera is still starting. Try again in a moment."); return; }
+    const canvas = document.createElement("canvas");
+    canvas.width = el.videoWidth;
+    canvas.height = el.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) { setErr("We couldn't capture the photo. Choose an image from your device instead."); return; }
+    context.translate(canvas.width, 0);
+    context.scale(-1, 1);
+    context.drawImage(el, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob((blob) => {
+      if (blob) pickFile(new File([blob], "camera-photo.jpg", { type: "image/jpeg" }));
+      else setErr("We couldn't capture the photo. Please try again.");
+      stopCamera();
+    }, "image/jpeg", 0.9);
+  };
 
   const poll = (id: string) => {
     started.current = Date.now();
@@ -96,6 +147,21 @@ export default function TryOn() {
   const total = items.reduce((s, p) => s + (p.salePrice ?? p.price), 0);
   const ready = (mode === "AI_MODEL" && !!modelId) || (mode === "UPLOAD" && !!photo);
 
+  const liveOverlay = (type: Product["jewelleryType"], side?: "left" | "right") => {
+    const shared = { top: `calc(var(--top) + ${overlayOffset}%)` } as CSSProperties;
+    if (type === "EARRINGS") return {
+      ...shared, left: side === "left" ? "24%" : "76%", width: `${18 * overlayScale / 100}%`,
+      transform: `translate(-50%, -50%) scaleX(-1)`,
+    };
+    if (["NECKLACE", "CHAIN", "LONG_CHAIN"].includes(type)) return {
+      ...shared, left: "50%", width: `${54 * overlayScale / 100}%`, transform: "translate(-50%, -50%)",
+    };
+    if (["BANGLE", "BRACELET"].includes(type)) return {
+      ...shared, left: "72%", width: `${30 * overlayScale / 100}%`, transform: "translate(-50%, -50%)",
+    };
+    return { ...shared, left: "65%", width: `${22 * overlayScale / 100}%`, transform: "translate(-50%, -50%)" };
+  };
+
   const save = async () => {
     if (!job?.resultUrl) return;
     try {
@@ -119,7 +185,7 @@ export default function TryOn() {
     <div className="page">
       <div className="page-head"><h1>Virtual try-on</h1></div>
       <ol className="stepper" aria-label="Steps">
-        {["Choose how", mode === "UPLOAD" ? "Add your photo" : "Pick a model", "Your preview"].map((label, i) => (
+        {["Choose how", mode === "UPLOAD" ? "Add your photo" : mode === "LIVE" ? "Live camera" : "Pick a model", "Your preview"].map((label, i) => (
           <li key={label} className={step === i + 1 ? "is-current" : step > i + 1 ? "is-done" : ""} aria-current={step === i + 1 ? "step" : undefined}>
             <span className="step-dot">{step > i + 1 ? <Icon name="check" size={14} /> : i + 1}</span>{label}
           </li>
@@ -174,6 +240,11 @@ export default function TryOn() {
                   <strong>Upload your photo</strong>
                   <span>See it on yourself. Your photo is only used to make this preview.</span>
                 </button>
+                <button className="method" onClick={startLivePreview}>
+                  <span className="method-icon"><Icon name="camera" size={28} /></span>
+                  <strong>Live camera overlay</strong>
+                  <span>See the product photos over your camera feed. No AI service needed; placement is approximate.</span>
+                </button>
               </div>
             </>
           ) : mode === "AI_MODEL" ? (
@@ -195,10 +266,39 @@ export default function TryOn() {
                 </div>
               )}
             </>
+          ) : mode === "LIVE" ? (
+            <div className="live-tryon">
+              <div className="live-stage">
+                <video ref={video} autoPlay playsInline muted aria-label="Live camera preview" />
+                {items.flatMap((p) => p.jewelleryType === "EARRINGS"
+                  ? (["left", "right"] as const).map((side) => (
+                    <img key={`${p.id}-${side}`} className="live-jewel" src={p.images[0]?.url} alt="" aria-hidden="true" style={{ ...liveOverlay(p.jewelleryType, side), "--top": "39%" } as CSSProperties} />
+                  ))
+                  : <img key={p.id} className="live-jewel" src={p.images[0]?.url} alt="" aria-hidden="true" style={{ ...liveOverlay(p.jewelleryType), "--top": ["NECKLACE", "CHAIN", "LONG_CHAIN"].includes(p.jewelleryType) ? "69%" : ["BANGLE", "BRACELET"].includes(p.jewelleryType) ? "80%" : "60%" } as CSSProperties} />
+                )}
+              </div>
+              <p className="live-disclaimer">Approximate preview. Product photos may include a background, and placement or scale may not match real fit. Your live camera feed stays on this device.</p>
+              <div className="live-controls">
+                <label>Jewellery size <input type="range" min="65" max="145" value={overlayScale} onChange={(e) => setOverlayScale(Number(e.target.value))} /></label>
+                <label>Vertical position <input type="range" min="-12" max="12" value={overlayOffset} onChange={(e) => setOverlayOffset(Number(e.target.value))} /></label>
+              </div>
+              <div className="tryon-actions" style={{ marginTop: 8 }}>
+                <button className="btn btn-quiet" onClick={() => { stopCamera(); setMode(null); }}><Icon name="close" size={18} />Stop camera</button>
+              </div>
+            </div>
           ) : (
             <>
               <h2 className="sr-only">Add your photo</h2>
-              {preview ? (
+              {cameraOn ? (
+                <div className="camera-capture">
+                  <video ref={video} autoPlay playsInline muted aria-label="Live camera preview" />
+                  <p className="muted">Face the camera in good, even lighting.</p>
+                  <div className="tryon-actions" style={{ marginTop: 4 }}>
+                    <button className="btn btn-quiet" onClick={stopCamera}>Cancel</button>
+                    <button className="btn btn-primary" onClick={capturePhoto}><Icon name="camera" size={18} />Capture photo</button>
+                  </div>
+                </div>
+              ) : preview ? (
                 <div className="photo-preview">
                   <img src={preview} alt="Your photo" />
                   <div className="stack">
@@ -214,19 +314,22 @@ export default function TryOn() {
                   </div>
                 </div>
               ) : (
-                <label className={`dropzone ${over ? "is-over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}>
-                  <span className="dropzone-icon"><Icon name="upload" size={26} /></span>
-                  <strong>Choose a photo or drop it here</strong>
-                  <span>JPG, PNG or WebP, up to {MAX_MB} MB. A clear, front-facing photo works best.</span>
-                  <input type="file" accept="image/jpeg,image/png,image/webp" capture="user" className="sr-only" onChange={(e) => pickFile(e.target.files?.[0])} />
-                </label>
+                <div className="photo-options">
+                  <button className="btn btn-secondary" onClick={startCamera}><Icon name="camera" size={18} />Open camera</button>
+                  <label className={`dropzone ${over ? "is-over" : ""}`} onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)} onDrop={onDrop}>
+                    <span className="dropzone-icon"><Icon name="upload" size={26} /></span>
+                    <strong>Choose a photo or drop it here</strong>
+                    <span>JPG, PNG or WebP, up to {MAX_MB} MB. A clear, front-facing photo works best.</span>
+                    <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(e) => pickFile(e.target.files?.[0])} />
+                  </label>
+                </div>
               )}
             </>
           )}
 
           {err && <p className="form-error" role="alert" style={{ marginTop: 16 }}>{err}</p>}
 
-          {!job && mode && (
+          {!job && mode && mode !== "LIVE" && (
             <div className="tryon-actions">
               <button className="btn btn-quiet" onClick={() => { setMode(null); setErr(""); }}><Icon name="arrowLeft" size={18} />Back</button>
               <button className="btn btn-primary" disabled={!ready} onClick={generate}><Icon name="sparkle" size={18} />Create preview</button>

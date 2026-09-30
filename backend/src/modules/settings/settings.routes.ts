@@ -23,6 +23,8 @@ const body = z.object({
   bankEnabled: z.boolean(),
   onlineEnabled: z.boolean(),
   pickupEnabled: z.boolean(),
+  themeMode: z.enum(["system", "light", "dark"]),
+  themeAccent: z.enum(["emerald", "gold", "rose", "blue"]),
 }).partial();
 
 r.put("/", requireAdmin, ah(async (req, res) => {
