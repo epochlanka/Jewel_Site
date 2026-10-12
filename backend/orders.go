@@ -1,0 +1,493 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+var orderStatuses = []string{"PENDING", "CONFIRMED", "PROCESSING", "READY", "DISPATCHED", "DELIVERED", "CANCELLED"}
+
+// PENDING → CONFIRMED → PROCESSING → READY → DISPATCHED → DELIVERED; CANCELLED before dispatch.
+var nextStatuses = map[string][]string{
+	"PENDING":    {"CONFIRMED", "CANCELLED"},
+	"CONFIRMED":  {"PROCESSING", "CANCELLED"},
+	"PROCESSING": {"READY", "CANCELLED"},
+	"READY":      {"DISPATCHED", "DELIVERED", "CANCELLED"}, // DELIVERED straight from READY for store pickup
+	"DISPATCHED": {"DELIVERED"},
+	"DELIVERED":  {},
+	"CANCELLED":  {},
+}
+
+type OrderItemProduct struct {
+	Slug   string  `json:"slug"`
+	Code   string  `json:"code,omitempty"`
+	Images []Image `json:"images"`
+}
+
+type OrderItem struct {
+	ID        string            `json:"id"`
+	OrderID   string            `json:"orderId"`
+	ProductID string            `json:"productId"`
+	Name      string            `json:"name"`
+	Price     int               `json:"price"`
+	Qty       int               `json:"qty"`
+	Product   *OrderItemProduct `json:"product,omitempty"`
+}
+
+type StatusLog struct {
+	ID        string `json:"id"`
+	OrderID   string `json:"orderId"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type OrderUser struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+}
+
+type Order struct {
+	ID             string      `json:"id"`
+	OrderNo        string      `json:"orderNo"`
+	UserID         *string     `json:"userId"`
+	FullName       string      `json:"fullName"`
+	Mobile         string      `json:"mobile"`
+	Whatsapp       *string     `json:"whatsapp"`
+	Email          *string     `json:"email"`
+	Address        *string     `json:"address"`
+	City           *string     `json:"city"`
+	PostalCode     *string     `json:"postalCode"`
+	Note           *string     `json:"note"`
+	DeliveryMethod string      `json:"deliveryMethod"`
+	PaymentMethod  string      `json:"paymentMethod"`
+	PaymentStatus  string      `json:"paymentStatus"`
+	Subtotal       int         `json:"subtotal"`
+	DeliveryFee    int         `json:"deliveryFee"`
+	Total          int         `json:"total"`
+	Status         string      `json:"status"`
+	CreatedAt      string      `json:"createdAt"`
+	Items          []OrderItem `json:"items,omitempty"`
+	History        []StatusLog `json:"history,omitempty"`
+	Count          *struct {
+		Items int `json:"items"`
+	} `json:"_count,omitempty"`
+	User         *OrderUser `json:"user,omitempty"`
+	NextStatuses []string   `json:"nextStatuses,omitempty"`
+	Confirmed    *bool      `json:"confirmed,omitempty"`
+}
+
+const orderCols = `o.id, o.order_no, o.user_id, o.full_name, o.mobile, o.whatsapp, o.email, o.address, o.city, o.postal_code, o.note,
+  o.delivery_method, o.payment_method, o.payment_status, o.subtotal, o.delivery_fee, o.total, o.status, o.created_at`
+
+func scanOrder(sc interface{ Scan(...any) error }) (Order, error) {
+	var o Order
+	var uid, wa, email, addr, city, postal, note sql.NullString
+	err := sc.Scan(&o.ID, &o.OrderNo, &uid, &o.FullName, &o.Mobile, &wa, &email, &addr, &city, &postal, &note,
+		&o.DeliveryMethod, &o.PaymentMethod, &o.PaymentStatus, &o.Subtotal, &o.DeliveryFee, &o.Total, &o.Status, &o.CreatedAt)
+	o.UserID, o.Whatsapp, o.Email, o.Address, o.City, o.PostalCode, o.Note = strPtr(uid), strPtr(wa), strPtr(email), strPtr(addr), strPtr(city), strPtr(postal), strPtr(note)
+	return o, err
+}
+
+func queryOrders(ctx context.Context, q querier, query string, args ...any) ([]Order, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Order{}
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// attachOrderDetail adds the items (with each product's slug, code and main photo) and the status history.
+func attachOrderDetail(ctx context.Context, q querier, orders []Order) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	ids := make([]string, len(orders))
+	index := map[string]*Order{}
+	for i := range orders {
+		ids[i] = orders[i].ID
+		orders[i].Items, orders[i].History = []OrderItem{}, []StatusLog{}
+		index[orders[i].ID] = &orders[i]
+	}
+	rows, err := q.QueryContext(ctx, `SELECT oi.id, oi.order_id, oi.product_id, oi.name, oi.price, oi.qty, p.slug, p.code,
+	  (SELECT pi.id FROM product_images pi WHERE pi.product_id = oi.product_id ORDER BY pi.sort, pi.id LIMIT 1),
+	  (SELECT pi.url FROM product_images pi WHERE pi.product_id = oi.product_id ORDER BY pi.sort, pi.id LIMIT 1)
+	  FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
+	  WHERE oi.order_id IN (`+placeholders(len(ids))+`) ORDER BY oi.id`, toAny(ids)...)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var it OrderItem
+		var slug, code, imgID, imgURL sql.NullString
+		if err := rows.Scan(&it.ID, &it.OrderID, &it.ProductID, &it.Name, &it.Price, &it.Qty, &slug, &code, &imgID, &imgURL); err != nil {
+			rows.Close()
+			return err
+		}
+		if slug.Valid {
+			it.Product = &OrderItemProduct{Slug: slug.String, Code: code.String, Images: []Image{}}
+			if imgURL.Valid {
+				it.Product.Images = []Image{{ID: imgID.String, URL: imgURL.String}}
+			}
+		}
+		o := index[it.OrderID]
+		o.Items = append(o.Items, it)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows, err = q.QueryContext(ctx, `SELECT id, order_id, status, created_at FROM order_status_logs WHERE order_id IN (`+placeholders(len(ids))+`) ORDER BY created_at, id`, toAny(ids)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h StatusLog
+		if err := rows.Scan(&h.ID, &h.OrderID, &h.Status, &h.CreatedAt); err != nil {
+			return err
+		}
+		o := index[h.OrderID]
+		o.History = append(o.History, h)
+	}
+	return rows.Err()
+}
+
+func (a *App) orderDetail(ctx context.Context, where string, args ...any) (*Order, error) {
+	list, err := queryOrders(ctx, a.db, `SELECT `+orderCols+` FROM orders o WHERE `+where+` LIMIT 1`, args...)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	if err := attachOrderDetail(ctx, a.db, list); err != nil {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// Bank transfer and online orders are confirmed only after the payment is received.
+// Cash on delivery is paid at the door, so those orders are confirmed by the shop.
+func needsPaymentFirst(o *Order) bool { return o.PaymentMethod != "COD" && o.PaymentStatus != "PAID" }
+
+func allowedNext(o *Order) []string {
+	out := []string{}
+	for _, s := range nextStatuses[o.Status] {
+		if !(s == "CONFIRMED" && needsPaymentFirst(o)) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// ---------- Checkout ----------
+
+type checkoutInput struct {
+	FullName, Mobile                                 string
+	Whatsapp, Email, Address, City, PostalCode, Note *string
+	DeliveryMethod, PaymentMethod                    string
+}
+
+func readCheckout(b body) (*checkoutInput, error) {
+	in := &checkoutInput{}
+	text := func(k string) (string, error) {
+		s, _, err := b.str(k)
+		return strings.TrimSpace(s), err
+	}
+	var err error
+	if in.FullName, err = text("fullName"); err != nil {
+		return nil, err
+	}
+	if len([]rune(in.FullName)) < 2 {
+		return nil, badField("fullName", "Enter your full name")
+	}
+	if in.Mobile, err = text("mobile"); err != nil {
+		return nil, err
+	}
+	if !mobileRe.MatchString(in.Mobile) {
+		return nil, badField("mobile", "Enter a mobile number like 07XXXXXXXX")
+	}
+	optional := func(k string) (*string, error) {
+		s, err := text(k)
+		if err != nil || s == "" {
+			return nil, err
+		}
+		if len([]rune(s)) > 300 {
+			return nil, badField(k, "Keep this under 300 characters")
+		}
+		return &s, nil
+	}
+	for k, dst := range map[string]**string{"whatsapp": &in.Whatsapp, "address": &in.Address, "city": &in.City, "postalCode": &in.PostalCode, "note": &in.Note} {
+		if *dst, err = optional(k); err != nil {
+			return nil, err
+		}
+	}
+	email, err := text("email")
+	if err != nil {
+		return nil, err
+	}
+	if email != "" {
+		if !validEmail(email) {
+			return nil, badField("email", "Enter a valid email")
+		}
+		in.Email = &email
+	}
+	if in.DeliveryMethod, err = text("deliveryMethod"); err != nil || !oneOf(in.DeliveryMethod, "DELIVERY", "PICKUP") {
+		return nil, badField("deliveryMethod", "")
+	}
+	if in.PaymentMethod, err = text("paymentMethod"); err != nil || !oneOf(in.PaymentMethod, "BANK_TRANSFER", "COD", "ONLINE") {
+		return nil, badField("paymentMethod", "")
+	}
+	return in, nil
+}
+
+var digitsRe = regexp.MustCompile(`\D`)
+
+func nextOrderNo(ctx context.Context, tx *sql.Tx) (string, error) {
+	var last string
+	err := tx.QueryRowContext(ctx, `SELECT order_no FROM orders ORDER BY created_at DESC, order_no DESC LIMIT 1`).Scan(&last)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	n, _ := strconv.Atoi(digitsRe.ReplaceAllString(last, ""))
+	return fmt.Sprintf("ORD-%06d", n+1), nil
+}
+
+func (a *App) placeOrder(ctx context.Context, cartID string, userID *string, in *checkoutInput) (string, error) {
+	s, err := getSettings(ctx, a.db)
+	if err != nil {
+		return "", err
+	}
+	if in.DeliveryMethod == "DELIVERY" && (in.Address == nil || in.City == nil) {
+		return "", httpErr(http.StatusBadRequest, "Enter your address and city for delivery.")
+	}
+	if in.DeliveryMethod == "PICKUP" && !s.PickupEnabled {
+		return "", httpErr(http.StatusBadRequest, "Store pickup isn't available right now.")
+	}
+	if on := map[string]bool{"COD": s.CodEnabled, "BANK_TRANSFER": s.BankEnabled, "ONLINE": s.OnlineEnabled}[in.PaymentMethod]; !on {
+		return "", httpErr(http.StatusBadRequest, "That payment method isn't available. Choose another one.")
+	}
+	offers, err := activeOffers(ctx, a.db)
+	if err != nil {
+		return "", err
+	}
+
+	// The write lock is taken when the transaction starts, so stock checks and the
+	// order number can't race with another checkout.
+	orderID := newID()
+	err = withTx(ctx, a.db, func(tx *sql.Tx) error {
+		live, err := queryProducts(ctx, tx, `SELECT `+productCols+` FROM cart_items ci JOIN products p ON p.id = ci.product_id
+		  WHERE ci.cart_id = ? AND p.is_active = 1 ORDER BY ci.id`, cartID)
+		if err != nil {
+			return err
+		}
+		if len(live) == 0 {
+			return httpErr(http.StatusBadRequest, "Your cart is empty.")
+		}
+		qtyRows, err := tx.QueryContext(ctx, `SELECT product_id, qty FROM cart_items WHERE cart_id = ?`, cartID)
+		if err != nil {
+			return err
+		}
+		qty := map[string]int{}
+		for qtyRows.Next() {
+			var pid string
+			var n int
+			if err := qtyRows.Scan(&pid, &n); err != nil {
+				qtyRows.Close()
+				return err
+			}
+			qty[pid] = n
+		}
+		qtyRows.Close()
+
+		subtotal := 0
+		for _, p := range live {
+			res, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`, qty[p.ID], p.ID, qty[p.ID])
+			if err != nil {
+				return err
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				return httpErr(http.StatusConflict, "%s doesn't have enough stock. Update your cart and try again.", p.Name)
+			}
+			subtotal += unitPrice(p, offers) * qty[p.ID]
+		}
+		fee := 0
+		if in.DeliveryMethod == "DELIVERY" {
+			fee = deliveryFeeFor(s, subtotal)
+		}
+		orderNo, err := nextOrderNo(ctx, tx)
+		if err != nil {
+			return err
+		}
+		now := nowTS()
+		if _, err := tx.ExecContext(ctx, `INSERT INTO orders (id, order_no, user_id, full_name, mobile, whatsapp, email, address, city, postal_code, note,
+		  delivery_method, payment_method, payment_status, subtotal, delivery_fee, total, status, created_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNPAID', ?, ?, ?, 'PENDING', ?)`,
+			orderID, orderNo, nullStr(userID), in.FullName, in.Mobile, nullStr(in.Whatsapp), nullStr(in.Email), nullStr(in.Address), nullStr(in.City),
+			nullStr(in.PostalCode), nullStr(in.Note), in.DeliveryMethod, in.PaymentMethod, subtotal, fee, subtotal+fee, now); err != nil {
+			return err
+		}
+		for _, p := range live {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO order_items (id, order_id, product_id, name, price, qty) VALUES (?, ?, ?, ?, ?, ?)`,
+				newID(), orderID, p.ID, p.Name, unitPrice(p, offers), qty[p.ID]); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO order_status_logs (id, order_id, status, created_at) VALUES (?, ?, 'PENDING', ?)`, newID(), orderID, now); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM cart_items WHERE cart_id = ?`, cartID)
+		return err
+	})
+	return orderID, err
+}
+
+func (a *App) createOrder(w http.ResponseWriter, r *http.Request) error {
+	b, err := readBody(r)
+	if err != nil {
+		return err
+	}
+	in, err := readCheckout(b)
+	if err != nil {
+		return err
+	}
+	ctx := r.Context()
+	cartID, err := a.resolveCart(ctx, a.db, r)
+	if err != nil {
+		return err
+	}
+	var userID *string
+	if u := a.currentUser(r); u != nil {
+		userID = &u.ID
+	}
+	id, err := a.placeOrder(ctx, cartID, userID, in)
+	if err != nil {
+		return err
+	}
+	o, err := a.orderDetail(ctx, "o.id = ?", id)
+	if err != nil {
+		return err
+	}
+	go a.notifyOrderPlaced(*o)
+	return writeJSON(w, http.StatusCreated, o)
+}
+
+func (a *App) myOrders(w http.ResponseWriter, r *http.Request) error {
+	u, err := a.requireUser(r)
+	if err != nil {
+		return err
+	}
+	list, err := queryOrders(r.Context(), a.db, `SELECT `+orderCols+` FROM orders o WHERE o.user_id = ? ORDER BY o.created_at DESC`, u.ID)
+	if err != nil {
+		return err
+	}
+	if err := attachOrderDetail(r.Context(), a.db, list); err != nil {
+		return err
+	}
+	return ok(w, list)
+}
+
+// Public tracking: order number + mobile number
+func (a *App) trackOrder(w http.ResponseWriter, r *http.Request) error {
+	q := r.URL.Query()
+	if !q.Has("orderNo") {
+		return badField("orderNo", "")
+	}
+	if !q.Has("mobile") {
+		return badField("mobile", "")
+	}
+	orderNo, mobile := strings.ToUpper(strings.TrimSpace(q.Get("orderNo"))), strings.TrimSpace(q.Get("mobile"))
+	if !strings.HasPrefix(orderNo, "ORD-") {
+		n, _ := strconv.Atoi(digitsRe.ReplaceAllString(orderNo, ""))
+		orderNo = fmt.Sprintf("ORD-%06d", n)
+	}
+	o, err := a.orderDetail(r.Context(), "o.order_no = ? AND o.mobile = ?", orderNo, mobile)
+	if err != nil {
+		return err
+	}
+	if o == nil {
+		return httpErr(http.StatusNotFound, "No order matches that order number and mobile number.")
+	}
+	return ok(w, o)
+}
+
+// ---------- Status and payment (admin) ----------
+
+func (a *App) changeStatus(ctx context.Context, orderID, to string) (*Order, error) {
+	o, err := a.orderDetail(ctx, "o.id = ?", orderID)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return nil, httpErr(http.StatusNotFound, "Order not found")
+	}
+	if !oneOf(to, nextStatuses[o.Status]...) {
+		return nil, httpErr(http.StatusConflict, "An order that is %s can't be moved to %s.", strings.ToLower(o.Status), strings.ToLower(to))
+	}
+	if to == "CONFIRMED" && needsPaymentFirst(o) {
+		return nil, httpErr(http.StatusConflict, "Mark the payment as paid first. The order is confirmed when the payment is received.")
+	}
+	err = withTx(ctx, a.db, func(tx *sql.Tx) error {
+		if to == "CANCELLED" {
+			for _, it := range o.Items {
+				if _, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock + ? WHERE id = ?`, it.Qty, it.ProductID); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO order_status_logs (id, order_id, status, created_at) VALUES (?, ?, ?, ?)`, newID(), orderID, to, nowTS()); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE orders SET status = ? WHERE id = ?`, to, orderID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	o.Status = to
+	go a.notifyStatusChanged(*o)
+	return o, nil
+}
+
+// setPayment records the payment; marking a pending order as paid also confirms it and tells the customer.
+func (a *App) setPayment(ctx context.Context, orderID, paymentStatus string) (*Order, error) {
+	o, err := a.orderDetail(ctx, "o.id = ?", orderID)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return nil, httpErr(http.StatusNotFound, "Order not found")
+	}
+	confirm := paymentStatus == "PAID" && o.Status == "PENDING"
+	err = withTx(ctx, a.db, func(tx *sql.Tx) error {
+		if confirm {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO order_status_logs (id, order_id, status, created_at) VALUES (?, ?, 'CONFIRMED', ?)`, newID(), orderID, nowTS()); err != nil {
+				return err
+			}
+			o.Status = "CONFIRMED"
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE orders SET payment_status = ?, status = ? WHERE id = ?`, paymentStatus, o.Status, orderID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	o.PaymentStatus = paymentStatus
+	o.Confirmed = &confirm
+	if confirm {
+		go a.notifyPaymentConfirmed(*o)
+	}
+	return o, nil
+}

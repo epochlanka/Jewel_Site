@@ -1,0 +1,4 @@
+# SQLite database and built server binary
+backend/data/
+backend/jewellery
+backend/jewellery.exe
