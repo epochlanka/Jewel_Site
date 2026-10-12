@@ -11,8 +11,8 @@ const okType = (f) => /image\/(jpeg|png|webp)/.test(f.type) && f.size <= 8 * 102
 export default async function productForm(view, ctx) {
   const id = ctx.params.id;
   const isNew = !id;
-  let p = null, images = [], files = [], asset = null, busy = false;
-  ctx.onCleanup(() => { files.forEach((f) => URL.revokeObjectURL(f.url)); if (asset) URL.revokeObjectURL(asset.url); });
+  let p = null, images = [], files = [], busy = false;
+  ctx.onCleanup(() => files.forEach((f) => URL.revokeObjectURL(f.url)));
 
   setHtml(view, pageLoading());
   let cats = [];
@@ -44,20 +44,6 @@ export default async function productForm(view, ctx) {
     ${images.length + files.length < 10 && html`<label class="im-add">${icon("image", 24)}Add photos
       <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-add-images></label>`}`);
 
-  const drawAsset = () => {
-    const url = asset?.url ?? p?.tryOnAssetUrl;
-    setHtml($("[data-asset]", view), html`
-      <span class="asset-preview">${url ? html`<img src="${url}" alt="Try-on image">` : icon("image", 28)}</span>
-      <div class="stack" style="gap: 8px">
-        <span class="field-hint">A PNG of just the piece on a transparent background gives the best results. Without one, the main photo is used.</span>
-        <div style="display: flex; gap: 8px; flex-wrap: wrap">
-          <label class="btn btn-quiet btn-sm">${icon("upload", 16)}${url ? "Replace" : "Upload PNG"}
-            <input type="file" accept="image/png,image/webp" class="sr-only" data-asset-picker></label>
-          ${url && html`<button type="button" class="btn btn-quiet btn-sm" data-remove-asset>Remove</button>`}
-        </div>
-      </div>`);
-  };
-
   setHtml(view, html`<form class="admin-page" data-product-form>
     <div class="admin-head">
       <div><a href="/admin/products" class="back-link">${icon("arrowLeft", 16)}Products</a><h1>${isNew ? "Add product" : p.name}</h1></div>
@@ -79,6 +65,9 @@ export default async function productForm(view, ctx) {
               </select>
             </label>
             <label class="field span-2"><span class="field-label">Description</span><textarea name="description" rows="5" maxlength="4000" placeholder="Materials, size, finish and how to care for it">${p?.description ?? ""}</textarea></label>
+            <label class="field"><span class="field-label">Jewellery type</span>
+              <select name="jewelleryType">${jewelleryTypes.map((t) => html`<option value="${t}"${attr("selected", (p?.jewelleryType ?? "EARRINGS") === t)}>${typeLabel[t]}</option>`)}</select>
+            </label>
             <label class="field"><span class="field-label">Style <span class="optional">(optional)</span></span><input name="style" maxlength="40" value="${p?.style ?? ""}" placeholder="Traditional, Modern…"><span class="field-hint">Shown as a filter in the shop</span></label>
             <label class="field"><span class="field-label">Colour <span class="optional">(optional)</span></span><input name="colour" maxlength="40" value="${p?.colour ?? ""}" placeholder="Gold, Silver, Rose gold…"></label>
           </div>
@@ -90,18 +79,6 @@ export default async function productForm(view, ctx) {
           <div class="image-manager" data-images></div>
         </section>
 
-        <section class="panel form">
-          <h2 style="font-size: 22px">AI try-on</h2>
-          ${switchField({ name: "tryOnEnabled", label: "Customers can try this on with AI", checked: p?.tryOnEnabled ?? true })}
-          <label class="field"><span class="field-label">Jewellery type</span>
-            <select name="jewelleryType">${jewelleryTypes.map((t) => html`<option value="${t}"${attr("selected", (p?.jewelleryType ?? "EARRINGS") === t)}>${typeLabel[t]}</option>`)}</select>
-            <span class="field-hint">Tells the AI where the piece is worn, for example earrings on the earlobes.</span>
-          </label>
-          <div class="field">
-            <span class="field-label">Try-on image <span class="optional">(optional)</span></span>
-            <div class="asset-row" data-asset></div>
-          </div>
-        </section>
       </div>
 
       <div class="admin-form-side">
@@ -124,7 +101,6 @@ export default async function productForm(view, ctx) {
     </div>
   </form>`);
   drawImages();
-  drawAsset();
 
   on(view, "change", "[data-add-images]", (e, el) => {
     const list = [...el.files];
@@ -157,28 +133,14 @@ export default async function productForm(view, ctx) {
       toast("Main photo updated");
     } catch (err) { toastError(err); }
   });
-  on(view, "change", "[data-asset-picker]", (e, el) => {
-    const f = el.files?.[0];
-    if (f && okType(f)) {
-      if (asset) URL.revokeObjectURL(asset.url);
-      asset = { file: f, url: URL.createObjectURL(f) };
-      drawAsset();
-    }
-  });
-  on(view, "click", "[data-remove-asset]", async () => {
-    if (asset) { URL.revokeObjectURL(asset.url); asset = null; return drawAsset(); }
-    try { await api.admin.removeTryOnAsset(p.id); p.tryOnAssetUrl = null; drawAsset(); toast("Try-on image removed"); }
-    catch (err) { toastError(err); }
-  });
   on(view, "submit", "[data-product-form]", async (e, form) => {
     e.preventDefault();
     if (busy) return;
     const fd = new FormData(form);
-    for (const k of ["isActive", "isNewArrival", "tryOnEnabled"]) fd.set(k, fd.get(k) ? "true" : "false");
+    for (const k of ["isActive", "isNewArrival"]) fd.set(k, fd.get(k) ? "true" : "false");
     // File pickers are only used to collect files; the chosen files are added below.
     for (const k of [...fd.keys()]) if (fd.get(k) instanceof File) fd.delete(k);
     files.forEach((f) => fd.append("images", f.file));
-    if (asset) fd.set("tryOnAsset", asset.file);
 
     const btn = $("[data-save]", view), errBox = $("[data-error]", view);
     busy = true; btn.disabled = true; btn.textContent = "Saving…"; errBox.hidden = true;

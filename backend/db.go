@@ -56,8 +56,6 @@ CREATE TABLE IF NOT EXISTS products (
   style TEXT,
   colour TEXT,
   jewellery_type TEXT NOT NULL,
-  try_on_enabled INTEGER NOT NULL DEFAULT 1,
-  try_on_asset_url TEXT,
   category_id TEXT NOT NULL REFERENCES categories(id),
   created_at TEXT NOT NULL
 );
@@ -112,6 +110,9 @@ CREATE TABLE IF NOT EXISTS orders (
   delivery_fee INTEGER NOT NULL,
   total INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'PENDING',
+  payment_slip_url TEXT,
+  payment_ref TEXT,
+  payment_slip_at TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS orders_user ON orders(user_id);
@@ -134,33 +135,6 @@ CREATE TABLE IF NOT EXISTS order_status_logs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS order_status_logs_order ON order_status_logs(order_id);
-
-CREATE TABLE IF NOT EXISTS ai_models (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  image_url TEXT NOT NULL,
-  is_active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS try_ons (
-  id TEXT PRIMARY KEY,
-  user_id TEXT REFERENCES users(id),
-  source TEXT NOT NULL,
-  ai_model_id TEXT REFERENCES ai_models(id),
-  input_url TEXT NOT NULL,
-  result_url TEXT,
-  status TEXT NOT NULL DEFAULT 'PENDING',
-  error TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS try_on_items (
-  id TEXT PRIMARY KEY,
-  try_on_id TEXT NOT NULL REFERENCES try_ons(id) ON DELETE CASCADE,
-  product_id TEXT NOT NULL REFERENCES products(id)
-);
-CREATE INDEX IF NOT EXISTS try_on_items_try_on ON try_on_items(try_on_id);
 
 -- An offer applies to one product, one category, or (both empty) the whole shop.
 CREATE TABLE IF NOT EXISTS offers (
@@ -186,10 +160,11 @@ CREATE TABLE IF NOT EXISTS shop_settings (
   address TEXT NOT NULL DEFAULT '',
   delivery_fee INTEGER NOT NULL DEFAULT 450,
   free_delivery_over INTEGER,
+  bank_name TEXT NOT NULL DEFAULT '',
+  bank_branch TEXT NOT NULL DEFAULT '',
+  account_name TEXT NOT NULL DEFAULT '',
+  account_number TEXT NOT NULL DEFAULT '',
   bank_details TEXT NOT NULL DEFAULT '',
-  cod_enabled INTEGER NOT NULL DEFAULT 1,
-  bank_enabled INTEGER NOT NULL DEFAULT 1,
-  online_enabled INTEGER NOT NULL DEFAULT 0,
   pickup_enabled INTEGER NOT NULL DEFAULT 1,
   theme_mode TEXT NOT NULL DEFAULT 'system',
   theme_accent TEXT NOT NULL DEFAULT 'emerald'
@@ -212,7 +187,58 @@ func openDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("update tables: %w", err)
+	}
 	return db, nil
+}
+
+// migrate brings a database made by an older version of the shop up to date.
+// Each step does nothing when it has already been applied.
+func migrate(db *sql.DB) error {
+	// AI try-on was removed.
+	for _, t := range []string{"try_on_items", "try_ons", "ai_models"} {
+		if _, err := db.Exec(`DROP TABLE IF EXISTS ` + t); err != nil {
+			return err
+		}
+	}
+	drop := map[string][]string{
+		"products":      {"try_on_enabled", "try_on_asset_url"},
+		"shop_settings": {"cod_enabled", "bank_enabled", "online_enabled"}, // bank transfer is the only payment method
+	}
+	add := map[string][]string{
+		"shop_settings": {"bank_name TEXT NOT NULL DEFAULT ''", "bank_branch TEXT NOT NULL DEFAULT ''", "account_name TEXT NOT NULL DEFAULT ''", "account_number TEXT NOT NULL DEFAULT ''"},
+		"orders":        {"payment_slip_url TEXT", "payment_ref TEXT", "payment_slip_at TEXT"},
+	}
+	hasColumn := func(table, col string) (bool, error) {
+		n, err := countRows(context.Background(), db, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, col)
+		return n > 0, err
+	}
+	for table, cols := range drop {
+		for _, col := range cols {
+			if has, err := hasColumn(table, col); err != nil {
+				return err
+			} else if has {
+				if _, err := db.Exec(`ALTER TABLE ` + table + ` DROP COLUMN ` + col); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for table, cols := range add {
+		for _, def := range cols {
+			col, _, _ := strings.Cut(def, " ")
+			if has, err := hasColumn(table, col); err != nil {
+				return err
+			} else if !has {
+				if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + def); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func withTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {

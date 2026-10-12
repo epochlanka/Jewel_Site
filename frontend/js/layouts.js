@@ -12,7 +12,6 @@ const links = [
   { to: "/shop", label: "Shop" },
   { to: "/shop?newArrivals=1", label: "New arrivals" },
   { to: "/shop?onSale=1", label: "Offers" },
-  { to: "/build-look", label: "Create your look" },
   { to: "/about", label: "About" },
   { to: "/contact", label: "Contact" },
 ];
@@ -86,27 +85,66 @@ export function siteLayout(root) {
 
   const drawFooter = () => {
     const s = state.settings;
-    setHtml(footer, html`<div class="footer-inner">
-      <div class="footer-brand"><a href="/" class="brand">${s.shopName}</a><p>${s.tagline}</p></div>
-      <div class="footer-col">
-        <h2>Help</h2>
-        <a href="/track">Track your order</a>
-        <a href="/delivery">Delivery and returns</a>
-        <a href="/faq">FAQ</a>
-        <a href="/faq#try-on">How AI try-on works</a>
+    const chat = s.whatsapp || s.phone;
+    const year = new Date().getFullYear();
+    setHtml(footer, html`<div class="footer-wrap">
+      <div class="footer-cta">
+        <div>
+          <h2>Need help choosing the perfect piece?</h2>
+          <p>Send us a message and we'll help you find the right jewellery for any occasion.</p>
+        </div>
+        ${chat
+          ? html`<a href="${whatsappLink(chat, "Hi, I'd like some help choosing a piece.")}" target="_blank" rel="noreferrer" class="footer-cta-btn">${icon("chat", 20)}Chat on WhatsApp</a>`
+          : html`<a href="/contact" class="footer-cta-btn">${icon("chat", 20)}Contact us</a>`}
       </div>
-      <div class="footer-col">
-        <h2>Contact</h2>
-        ${s.phone && html`<a href="${phoneLink(s.phone)}">${s.phone}</a>`}
-        ${s.whatsapp && html`<a href="${whatsappLink(s.whatsapp)}" target="_blank" rel="noreferrer">WhatsApp ${s.whatsapp}</a>`}
-        ${s.email && html`<a href="mailto:${s.email}">${s.email}</a>`}
-        ${s.address && html`<span>${s.address}</span>`}
-        ${!s.phone && !s.whatsapp && !s.email && !s.address && html`<a href="/contact">Contact us</a>`}
+
+      <div class="footer-inner">
+        <div class="footer-brand">
+          <a href="/" class="footer-logo">${icon("diamond", 26)}<span>${s.shopName}</span></a>
+          <p>${s.tagline}</p>
+          <div class="footer-social">
+            ${s.whatsapp && html`<a href="${whatsappLink(s.whatsapp)}" target="_blank" rel="noreferrer" aria-label="WhatsApp">${icon("chat", 20)}</a>`}
+            ${s.phone && html`<a href="${phoneLink(s.phone)}" aria-label="Call us">${icon("phone", 20)}</a>`}
+            ${s.email && html`<a href="mailto:${s.email}" aria-label="Email us">${icon("mail", 20)}</a>`}
+            <a href="/contact" aria-label="Visit the shop">${icon("pin", 20)}</a>
+          </div>
+        </div>
+        <div class="footer-col">
+          <h2>Shop</h2>
+          <a href="/shop">All jewellery</a>
+          <a href="/shop?newArrivals=1">New arrivals</a>
+          <a href="/shop?onSale=1">Offers</a>
+          <a href="/account/wishlist">Wishlist</a>
+        </div>
+        <div class="footer-col">
+          <h2>Help</h2>
+          <a href="/track">Track your order</a>
+          <a href="/delivery">Delivery and returns</a>
+          <a href="/faq#pay">How to pay</a>
+          <a href="/faq">FAQ</a>
+        </div>
+        <div class="footer-col footer-contact">
+          <h2>Contact</h2>
+          ${s.phone && html`<a href="${phoneLink(s.phone)}">${icon("phone", 18)}<span>${s.phone}</span></a>`}
+          ${s.whatsapp && html`<a href="${whatsappLink(s.whatsapp)}" target="_blank" rel="noreferrer">${icon("chat", 18)}<span>WhatsApp ${s.whatsapp}</span></a>`}
+          ${s.email && html`<a href="mailto:${s.email}">${icon("mail", 18)}<span>${s.email}</span></a>`}
+          ${s.address && html`<span class="footer-address">${icon("pin", 18)}<span>${s.address}</span></span>`}
+          ${!s.phone && !s.whatsapp && !s.email && !s.address && html`<a href="/contact">${icon("mail", 18)}<span>Contact us</span></a>`}
+        </div>
       </div>
-    </div>
-    <div class="footer-base">
-      <span>© ${new Date().getFullYear()} ${s.shopName}</span>
-      <nav class="footer-legal" aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+
+      <div class="footer-trust">
+        <span>${icon("truck", 18)}Islandwide delivery</span>
+        <span>${icon("bank", 18)}Secure bank transfer</span>
+        <span>${icon("lock", 18)}Safe checkout</span>
+        ${s.pickupEnabled && html`<span>${icon("store", 18)}Free store pickup</span>`}
+      </div>
+
+      <div class="footer-base">
+        <span>© ${year} ${s.shopName}. All rights reserved.</span>
+        <nav class="footer-legal" aria-label="Legal"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/contact">Contact</a></nav>
+        <button class="footer-top" data-back-to-top aria-label="Back to top">${icon("chevronDown", 18)}</button>
+      </div>
     </div>`);
   };
 
@@ -123,6 +161,7 @@ export function siteLayout(root) {
     on(root, "click", "[data-menu-close]", () => setMenu(false)),
     on(root, "click", ".drawer a", () => setMenu(false)),
     on(root, "click", "[data-sign-out]", () => { setMenu(false); logout(); }),
+    on(root, "click", "[data-back-to-top]", () => window.scrollTo({ top: 0, behavior: "smooth" })),
     on(root, "submit", "[data-search]", (e, form) => {
       e.preventDefault();
       const q = String(new FormData(form).get("q") || "").trim();
@@ -157,7 +196,6 @@ const adminLinks = [
   { to: "/admin/products", label: "Products", icon: "products" },
   { to: "/admin/categories", label: "Categories", icon: "categories" },
   { to: "/admin/customers", label: "Customers", icon: "customers" },
-  { to: "/admin/ai-models", label: "AI models", icon: "model" },
   { to: "/admin/offers", label: "Offers", icon: "offers" },
   { to: "/admin/reports", label: "Reports", icon: "reports" },
   { to: "/admin/settings", label: "Settings", icon: "settings" },
@@ -169,6 +207,7 @@ export function adminLayout(root) {
     <div class="admin-main">
       <header class="admin-top">
         <button class="icon-btn admin-menu" aria-label="Open menu" aria-expanded="false" data-admin-menu>${icon("menu")}</button>
+        <a href="/admin" class="admin-top-brand" data-admin-brand></a>
         <span class="admin-user"></span>
       </header>
       <div class="admin-content"></div>
@@ -180,6 +219,7 @@ export function adminLayout(root) {
 
   const drawSide = () => {
     const path = location.pathname;
+    $("[data-admin-brand]", root).textContent = state.settings.shopName;
     setHtml(side, html`
       <a href="/admin" class="admin-logo">${state.settings.shopName}</a>
       <nav class="admin-nav" aria-label="Admin">${adminLinks.map((l) => {

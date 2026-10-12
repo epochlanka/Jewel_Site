@@ -11,7 +11,7 @@ Needs Go 1.22 or newer.
 cd backend
 cp .env.example .env     # first time only; then set JWT_SECRET
 go run . seed            # admin@shop.lk / admin123, categories, shop settings
-go run . seed-demo       # optional demo products and model photos
+go run . seed-demo       # optional demo products, category photos and an offer
 go run .                 # http://localhost:4000
 ```
 

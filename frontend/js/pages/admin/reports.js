@@ -24,7 +24,6 @@ export default function reports(view) {
     <div class="report-grid">
       <section class="panel"><div class="panel-head"><h2>Orders by status</h2><a href="/admin/orders" class="panel-link">All orders</a></div><div data-status>${pageLoading()}</div></section>
       <section class="panel"><div class="panel-head"><h2>Best sellers</h2><span class="panel-meta">Pieces sold</span></div><div data-top>${pageLoading()}</div></section>
-      <section class="panel"><div class="panel-head"><h2>Most tried on</h2><span class="panel-meta">AI try-ons</span></div><div data-tried>${pageLoading()}</div></section>
       <section class="panel"><div class="panel-head"><h2>Sold out</h2><a href="/admin/products?show=low" class="panel-link">Update stock</a></div><div data-out>${pageLoading()}</div></section>
       <section class="panel panel-wide" style="grid-column: 1 / -1"><div class="panel-head"><h2>Newest products</h2><a href="/admin/products" class="panel-link">All products</a></div><div data-newest>${pageLoading()}</div></section>
     </div>
@@ -64,9 +63,6 @@ export default function reports(view) {
     setHtml($("[data-top]", view), prod.top.length
       ? html`<ol class="rank-list">${prod.top.map((t) => html`<li><a href="/admin/products/${t.productId}">${t.name}</a><strong>${t.qty}</strong></li>`)}</ol>`
       : html`<p class="empty-note">No sales yet.</p>`);
-    setHtml($("[data-tried]", view), prod.mostTried.length
-      ? html`<ol class="rank-list">${prod.mostTried.map((t) => html`<li>${t.id ? html`<a href="/admin/products/${t.id}">${t.name}</a>` : html`<span class="muted">Deleted product</span>`}<strong>${t.tries}</strong></li>`)}</ol>`
-      : html`<p class="empty-note">No try-ons yet.</p>`);
     setHtml($("[data-out]", view), prod.outOfStock.length
       ? html`<ul class="stock-list">${prod.outOfStock.map((p) => html`<li><a href="/admin/products/${p.id}" class="stock-name">${p.name}<span class="muted">${p.code}</span></a><span class="stock-count is-out">Sold out</span></li>`)}</ul>`
       : html`<p class="empty-note">Nothing is sold out.</p>`);

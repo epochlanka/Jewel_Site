@@ -79,7 +79,7 @@ export default function orderDetail(view, ctx) {
         <div class="detail-side">
           ${(actions.length > 0 || canCancel || waitingPay) && html`<section class="panel no-print">
             <h2 style="font-size: 22px; margin-bottom: 14px">Next step</h2>
-            ${waitingPay && html`<p class="muted" style="margin-bottom: 12px">Waiting for payment. Check the slip or your account, then confirm. The customer sees the order as confirmed.</p>`}
+            ${waitingPay && html`<p class="muted" style="margin-bottom: 12px">${o.paymentSlipUrl ? "The customer uploaded a payment slip. Check that the money is in your account, then confirm." : "Waiting for the bank transfer. When the money is in your account, confirm the order."} The customer sees the order as confirmed.</p>`}
             <div class="status-actions">
               ${waitingPay && html`<button class="btn btn-primary btn-block" data-pay="PAID"${attr("disabled", busy)}>${icon("check", 18)}Payment received, confirm order</button>`}
               ${actions.map((st, i) => html`<button class="btn ${i === 0 && !waitingPay ? "btn-primary" : "btn-secondary"} btn-block" data-move="${st}"${attr("disabled", busy)}>${labelFor(st)}</button>`)}
@@ -116,6 +116,11 @@ export default function orderDetail(view, ctx) {
               <dt>Method</dt><dd>${paymentLabel[o.paymentMethod]}</dd>
               <dt>Status</dt><dd><span class="pill pill-${o.paymentStatus.toLowerCase()}">${paymentStatusLabel[o.paymentStatus]}</span></dd>
             </dl>
+            ${o.paymentSlipUrl ? html`<div class="slip-box">
+              <span class="field-label">Payment slip</span>
+              <a href="${o.paymentSlipUrl}" target="_blank" rel="noreferrer" class="pay-slip-thumb">${/\.pdf$/i.test(o.paymentSlipUrl) ? html`${icon("orders", 22)}Open slip (PDF)` : html`<img src="${o.paymentSlipUrl}" alt="Payment slip for ${o.orderNo}">`}</a>
+              <span class="muted" style="font-size: 13px">Uploaded ${dateTime(o.paymentSlipAt)}${o.paymentRef ? ` · Ref ${o.paymentRef}` : ""}</span>
+            </div>` : o.paymentMethod === "BANK_TRANSFER" && o.paymentStatus !== "PAID" && html`<p class="muted" style="font-size: 14px; margin-top: 12px">No payment slip uploaded yet.</p>`}
             <div class="contact-actions no-print">
               ${o.paymentStatus !== "PAID" && !waitingPay && html`<button class="btn btn-secondary btn-sm" data-pay="PAID"${attr("disabled", busy)}>${icon("check", 16)}Mark as paid</button>`}
               ${o.paymentStatus === "PAID" && html`<button class="btn btn-quiet btn-sm" data-pay="UNPAID">Mark as not paid</button>`}

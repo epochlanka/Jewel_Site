@@ -8,16 +8,19 @@ import (
 )
 
 type Config struct {
-	Port       string
-	JWTSecret  string
-	DBPath     string
-	UploadDir  string
-	StaticDir  string
-	PublicURL  string
-	AIProvider string // mock | fal | http
-	AIAPIKey   string
-	AIEndpoint string
-	FalModel   string
+	Port      string
+	JWTSecret string
+	DBPath    string
+	UploadDir string
+	StaticDir string
+	SiteURL   string // used for links in emails
+
+	// Outgoing email (for example Gmail: smtp.gmail.com, port 587, an app password).
+	SMTPHost string
+	SMTPPort string
+	SMTPUser string
+	SMTPPass string
+	MailFrom string
 }
 
 // loadEnvFile reads KEY=VALUE lines from a .env file. Variables already set in the
@@ -66,21 +69,17 @@ func loadConfig() Config {
 	if _, err := strconv.Atoi(port); err != nil {
 		port = "4000"
 	}
-	falKey := os.Getenv("FAL_KEY")
-	provider := env("AI_PROVIDER", "mock")
-	if os.Getenv("AI_PROVIDER") == "" && falKey != "" {
-		provider = "fal"
-	}
 	return Config{
-		Port:       port,
-		JWTSecret:  env("JWT_SECRET", "dev"),
-		DBPath:     env("DB_PATH", "data/jewellery.db"),
-		UploadDir:  env("UPLOAD_DIR", "uploads"),
-		StaticDir:  env("STATIC_DIR", "../frontend"),
-		PublicURL:  strings.TrimRight(env("PUBLIC_URL", "http://localhost:"+port), "/"),
-		AIProvider: provider,
-		AIAPIKey:   env("AI_API_KEY", falKey),
-		AIEndpoint: os.Getenv("AI_ENDPOINT"),
-		FalModel:   env("FAL_MODEL", "fal-ai/gemini-25-flash-image/edit"),
+		Port:      port,
+		JWTSecret: env("JWT_SECRET", "dev"),
+		DBPath:    env("DB_PATH", "data/jewellery.db"),
+		UploadDir: env("UPLOAD_DIR", "uploads"),
+		StaticDir: env("STATIC_DIR", "../frontend"),
+		SiteURL:   strings.TrimRight(env("SITE_URL", env("PUBLIC_URL", "http://localhost:"+port)), "/"),
+		SMTPHost:  os.Getenv("SMTP_HOST"),
+		SMTPPort:  env("SMTP_PORT", "587"),
+		SMTPUser:  os.Getenv("SMTP_USER"),
+		SMTPPass:  os.Getenv("SMTP_PASS"),
+		MailFrom:  env("MAIL_FROM", os.Getenv("SMTP_USER")),
 	}
 }

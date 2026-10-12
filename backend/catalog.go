@@ -46,8 +46,6 @@ type Product struct {
 	Style         *string   `json:"style"`
 	Colour        *string   `json:"colour"`
 	JewelleryType string    `json:"jewelleryType"`
-	TryOnEnabled  bool      `json:"tryOnEnabled"`
-	TryOnAssetURL *string   `json:"tryOnAssetUrl"`
 	CategoryID    string    `json:"categoryId"`
 	CreatedAt     string    `json:"createdAt"`
 	Images        []Image   `json:"images"`
@@ -56,14 +54,14 @@ type Product struct {
 }
 
 const productCols = `p.id, p.code, p.name, p.slug, p.description, p.price, p.stock, p.is_active, p.is_new_arrival,
-  p.style, p.colour, p.jewellery_type, p.try_on_enabled, p.try_on_asset_url, p.category_id, p.created_at`
+  p.style, p.colour, p.jewellery_type, p.category_id, p.created_at`
 
 func scanProduct(sc interface{ Scan(...any) error }) (Product, error) {
 	var p Product
-	var desc, style, colour, asset sql.NullString
+	var desc, style, colour sql.NullString
 	err := sc.Scan(&p.ID, &p.Code, &p.Name, &p.Slug, &desc, &p.Price, &p.Stock, &p.IsActive, &p.IsNewArrival,
-		&style, &colour, &p.JewelleryType, &p.TryOnEnabled, &asset, &p.CategoryID, &p.CreatedAt)
-	p.Description, p.Style, p.Colour, p.TryOnAssetURL = strPtr(desc), strPtr(style), strPtr(colour), strPtr(asset)
+		&style, &colour, &p.JewelleryType, &p.CategoryID, &p.CreatedAt)
+	p.Description, p.Style, p.Colour = strPtr(desc), strPtr(style), strPtr(colour)
 	p.Images = []Image{}
 	return p, err
 }
@@ -243,10 +241,11 @@ type Settings struct {
 	Address          string `json:"address"`
 	DeliveryFee      int    `json:"deliveryFee"`
 	FreeDeliveryOver *int   `json:"freeDeliveryOver"`
-	BankDetails      string `json:"bankDetails"`
-	CodEnabled       bool   `json:"codEnabled"`
-	BankEnabled      bool   `json:"bankEnabled"`
-	OnlineEnabled    bool   `json:"onlineEnabled"`
+	BankName         string `json:"bankName"`
+	BankBranch       string `json:"bankBranch"`
+	AccountName      string `json:"accountName"`
+	AccountNumber    string `json:"accountNumber"`
+	BankDetails      string `json:"bankDetails"` // extra payment instructions
 	PickupEnabled    bool   `json:"pickupEnabled"`
 	ThemeMode        string `json:"themeMode"`
 	ThemeAccent      string `json:"themeAccent"`
@@ -260,9 +259,9 @@ func getSettings(ctx context.Context, q querier) (Settings, error) {
 	var s Settings
 	var free sql.NullInt64
 	err := q.QueryRowContext(ctx, `SELECT id, shop_name, tagline, phone, whatsapp, email, address, delivery_fee, free_delivery_over,
-	  bank_details, cod_enabled, bank_enabled, online_enabled, pickup_enabled, theme_mode, theme_accent FROM shop_settings WHERE id = 1`).
+	  bank_name, bank_branch, account_name, account_number, bank_details, pickup_enabled, theme_mode, theme_accent FROM shop_settings WHERE id = 1`).
 		Scan(&s.ID, &s.ShopName, &s.Tagline, &s.Phone, &s.Whatsapp, &s.Email, &s.Address, &s.DeliveryFee, &free,
-			&s.BankDetails, &s.CodEnabled, &s.BankEnabled, &s.OnlineEnabled, &s.PickupEnabled, &s.ThemeMode, &s.ThemeAccent)
+			&s.BankName, &s.BankBranch, &s.AccountName, &s.AccountNumber, &s.BankDetails, &s.PickupEnabled, &s.ThemeMode, &s.ThemeAccent)
 	s.FreeDeliveryOver = intPtr(free)
 	return s, err
 }

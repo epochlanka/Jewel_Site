@@ -2,8 +2,8 @@ import { html, setHtml } from "../html.js";
 import { icon } from "../icons.js";
 import { api } from "../api.js";
 import { lkr, whatsappLink } from "../format.js";
-import { state, toast } from "../store.js";
-import { awaitingPayment, isConfirmed, orderLines, orderNotice } from "../ui.js";
+import { state, toast, rememberedMobile } from "../store.js";
+import { awaitingPayment, isConfirmed, orderLines, orderNotice, slipSent } from "../ui.js";
 
 const POLL_MS = 15000;
 
@@ -11,6 +11,7 @@ export default function orderConfirmation(view, ctx) {
   const orderNo = ctx.params.orderNo;
   const placed = ctx.state?.order;
   let order = placed;
+  const mobile = placed?.mobile ?? rememberedMobile(orderNo);
   let wasConfirmed = placed ? isConfirmed(placed) : false;
 
   const draw = () => {
@@ -20,15 +21,20 @@ export default function orderConfirmation(view, ctx) {
     const confirmed = order ? isConfirmed(order) : false;
     const cancelled = order?.status === "CANCELLED";
     const waiting = order ? awaitingPayment(order) : false;
+    const checking = order ? slipSent(order) : false;
+    // Without the order details (opened on another device) the payment page asks for the mobile number.
+    const canPay = order ? waiting && !checking : true;
 
-    const title = cancelled ? "Your order was cancelled" : confirmed ? "Your order is confirmed" : waiting ? "Order received, waiting for payment" : "Thank you for your order";
+    const title = cancelled ? "Your order was cancelled" : confirmed ? "Your order is confirmed" : checking ? "We're checking your payment" : waiting ? "Order received, waiting for payment" : "Thank you for your order";
     const sub = cancelled
       ? "Contact us if you have any questions about this order."
       : confirmed
         ? `${order?.paymentStatus === "PAID" ? "We received your payment. " : ""}We're getting your pieces ready.`
-        : waiting
-          ? "Your order is confirmed as soon as we receive your payment."
-          : `We'll contact you${order ? ` on ${order.mobile}` : ""} to confirm it. Keep your order number to track it.`;
+        : checking
+          ? "We received your payment slip. Your order is confirmed as soon as the transfer reaches us."
+          : waiting
+          ? "Transfer the total and upload the slip. Your order is confirmed as soon as we receive your payment."
+          : "Pay by bank transfer to confirm it. Keep your order number to track it.";
 
     setHtml(view, html`<div class="page"><div class="confirm">
       <section class="confirm-hero" aria-live="polite">
@@ -37,8 +43,9 @@ export default function orderConfirmation(view, ctx) {
         <p class="order-no">Your order number<strong>${orderNo}</strong></p>
         <p class="muted">${sub}</p>
         <div class="card-actions" style="margin-top: 8px">
-          <a href="/track?orderNo=${encodeURIComponent(orderNo)}${order ? `&mobile=${encodeURIComponent(order.mobile)}` : ""}" class="btn btn-primary">Track order</a>
-          ${contact && html`<a href="${whatsappLink(contact, msg)}" target="_blank" rel="noreferrer" class="btn btn-secondary">${icon("chat", 18)}${waiting ? "Send payment slip" : "WhatsApp us"}</a>`}
+          ${canPay && html`<a href="/pay/${encodeURIComponent(orderNo)}" class="btn btn-primary">${icon("bank", 18)}Pay now</a>`}
+          <a href="/track?orderNo=${encodeURIComponent(orderNo)}${order ? `&mobile=${encodeURIComponent(order.mobile)}` : ""}" class="btn ${canPay ? "btn-secondary" : "btn-primary"}">Track order</a>
+          ${contact && html`<a href="${whatsappLink(contact, msg)}" target="_blank" rel="noreferrer" class="btn btn-quiet">${icon("chat", 18)}WhatsApp us</a>`}
         </div>
       </section>
 
@@ -55,11 +62,11 @@ export default function orderConfirmation(view, ctx) {
   draw();
 
   // Keep checking while the order waits for payment or a call, so the page updates once it is confirmed.
-  if (!placed?.mobile) return;
+  if (!mobile) return;
   const check = async () => {
     if (document.hidden) return;
     try {
-      const fresh = await api.trackOrder(orderNo, placed.mobile);
+      const fresh = await api.trackOrder(orderNo, mobile);
       if (!ctx.alive()) return;
       order = fresh;
       draw();

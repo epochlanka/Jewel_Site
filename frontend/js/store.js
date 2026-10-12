@@ -8,8 +8,8 @@ import { navigate, currentPath } from "./router.js";
 const defaults = {
   shopName: "[Shop name]", tagline: "Jewellery for every day and every occasion.",
   phone: "", whatsapp: "", email: "", address: "",
-  deliveryFee: 450, freeDeliveryOver: null, bankDetails: "",
-  codEnabled: true, bankEnabled: true, onlineEnabled: false, pickupEnabled: true,
+  deliveryFee: 450, freeDeliveryOver: null, pickupEnabled: true,
+  bankName: "", bankBranch: "", accountName: "", accountNumber: "", bankDetails: "",
   themeMode: "system", themeAccent: "emerald",
 };
 
@@ -134,6 +134,22 @@ export async function setCartQty(productId, qty) {
 
 export async function removeFromCart(productId) {
   try { state.cart = await api.removeItem(productId); emit("cart"); toast("Removed from cart"); } catch (e) { toastError(e); }
+}
+
+// ---------- Recent orders ----------
+// The browser remembers the mobile number of orders placed here, so the payment
+// page can open them again without asking.
+
+export function rememberOrder(o) {
+  try {
+    const list = JSON.parse(localStorage.getItem("orders") || "{}");
+    list[o.orderNo] = o.mobile;
+    localStorage.setItem("orders", JSON.stringify(list));
+  } catch { /* storage blocked */ }
+}
+
+export function rememberedMobile(orderNo) {
+  try { return JSON.parse(localStorage.getItem("orders") || "{}")[orderNo] ?? null; } catch { return null; }
 }
 
 // ---------- Account ----------

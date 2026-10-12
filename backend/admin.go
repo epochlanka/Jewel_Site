@@ -345,93 +345,6 @@ func (a *App) adminCustomer(w http.ResponseWriter, r *http.Request) error {
 	return ok(w, c)
 }
 
-// ---------- AI models ----------
-
-func (a *App) adminAiModels(w http.ResponseWriter, r *http.Request) error {
-	list, err := a.listAiModels(r.Context(), false, true)
-	if err != nil {
-		return err
-	}
-	return ok(w, list)
-}
-
-func (a *App) addAiModel(w http.ResponseWriter, r *http.Request) error {
-	if err := parseMultipart(w, r); err != nil {
-		return err
-	}
-	img, err := formImage(r, "image")
-	if err != nil {
-		return err
-	}
-	if img == nil {
-		return httpErr(http.StatusBadRequest, "Choose a JPG, PNG or WebP photo.")
-	}
-	name, _ := formValue(r, "name")
-	name = strings.TrimSpace(name)
-	if name == "" || len([]rune(name)) > 40 {
-		return badField("name", "Enter a name (up to 40 characters)")
-	}
-	url, err := a.saveUpload(img)
-	if err != nil {
-		return err
-	}
-	m := AiModel{ID: newID(), Name: name, ImageURL: url, IsActive: true, CreatedAt: nowTS()}
-	if _, err := a.db.ExecContext(r.Context(), `INSERT INTO ai_models (id, name, image_url, is_active, created_at) VALUES (?, ?, ?, 1, ?)`, m.ID, m.Name, m.ImageURL, m.CreatedAt); err != nil {
-		return err
-	}
-	return writeJSON(w, http.StatusCreated, m)
-}
-
-func (a *App) updateAiModel(w http.ResponseWriter, r *http.Request) error {
-	b, err := readBody(r)
-	if err != nil {
-		return err
-	}
-	id := r.PathValue("id")
-	var set []string
-	var args []any
-	if name, has, err := b.str("name"); err != nil {
-		return err
-	} else if has {
-		name = strings.TrimSpace(name)
-		if name == "" || len([]rune(name)) > 40 {
-			return badField("name", "Enter a name (up to 40 characters)")
-		}
-		set, args = append(set, "name = ?"), append(args, name)
-	}
-	if v, has, err := b.boolean("isActive"); err != nil {
-		return err
-	} else if has {
-		set, args = append(set, "is_active = ?"), append(args, boolInt(v))
-	}
-	if len(set) > 0 {
-		if _, err := a.db.ExecContext(r.Context(), `UPDATE ai_models SET `+strings.Join(set, ", ")+` WHERE id = ?`, append(args, id)...); err != nil {
-			return err
-		}
-	}
-	var m AiModel
-	if err := a.db.QueryRowContext(r.Context(), `SELECT id, name, image_url, is_active, created_at FROM ai_models WHERE id = ?`, id).Scan(&m.ID, &m.Name, &m.ImageURL, &m.IsActive, &m.CreatedAt); err != nil {
-		return err
-	}
-	return ok(w, m)
-}
-
-// Models used in past try-ons are hidden instead of deleted, so that history stays intact.
-func (a *App) deleteAiModel(w http.ResponseWriter, r *http.Request) error {
-	id := r.PathValue("id")
-	used, err := countRows(r.Context(), a.db, `SELECT COUNT(*) FROM try_ons WHERE ai_model_id = ?`, id)
-	if err != nil {
-		return err
-	}
-	if used > 0 {
-		if _, err := a.db.ExecContext(r.Context(), `UPDATE ai_models SET is_active = 0 WHERE id = ?`, id); err != nil {
-			return err
-		}
-		return ok(w, map[string]bool{"hidden": true})
-	}
-	return a.execOne(w, r, `DELETE FROM ai_models WHERE id = ?`, id)
-}
-
 // ---------- Offers ----------
 
 type OfferRow struct {
@@ -712,28 +625,5 @@ func (a *App) productsReport(w http.ResponseWriter, r *http.Request) error {
 		best = append(best, t)
 	}
 	rows.Close()
-
-	type tried struct {
-		ID    *string `json:"id,omitempty"`
-		Name  *string `json:"name,omitempty"`
-		Code  *string `json:"code,omitempty"`
-		Tries int     `json:"tries"`
-	}
-	mostTried := []tried{}
-	rows, err = a.db.QueryContext(ctx, `SELECT p.id, p.name, p.code, COUNT(*) AS n FROM try_on_items ti LEFT JOIN products p ON p.id = ti.product_id
-	  GROUP BY ti.product_id ORDER BY n DESC LIMIT 10`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var t tried
-		var id, name, code sql.NullString
-		if err := rows.Scan(&id, &name, &code, &t.Tries); err != nil {
-			return err
-		}
-		t.ID, t.Name, t.Code = strPtr(id), strPtr(name), strPtr(code)
-		mostTried = append(mostTried, t)
-	}
-	return ok(w, map[string]any{"top": best, "outOfStock": outOfStock, "newest": newest, "mostTried": mostTried})
+	return ok(w, map[string]any{"top": best, "outOfStock": outOfStock, "newest": newest})
 }

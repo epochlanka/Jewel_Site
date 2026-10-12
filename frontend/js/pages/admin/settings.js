@@ -32,10 +32,14 @@ export default function settingsPage(view, ctx) {
           </section>
           <section class="panel form">
             <h2 style="font-size: 22px">Payment</h2>
-            ${switchField({ name: "codEnabled", label: "Cash on delivery", checked: s.codEnabled })}
-            ${switchField({ name: "bankEnabled", label: "Bank transfer", checked: s.bankEnabled })}
-            <label class="field"><span class="field-label">Bank details</span><textarea name="bankDetails" rows="4" maxlength="1000" placeholder="Bank: &#10;Branch: &#10;Account name: &#10;Account number: ">${s.bankDetails}</textarea><span class="field-hint">Shown to customers who choose bank transfer</span></label>
-            ${switchField({ name: "onlineEnabled", label: "Online card payment", hint: "Needs a payment gateway such as PayHere to be connected first", checked: s.onlineEnabled })}
+            <p class="field-hint" style="margin-top: -8px">Customers pay by bank transfer. These details are shown on the payment page after they place an order.</p>
+            <div class="form-grid">
+              <label class="field"><span class="field-label">Bank</span><input name="bankName" maxlength="80" value="${s.bankName}" placeholder="Commercial Bank"></label>
+              <label class="field"><span class="field-label">Branch</span><input name="bankBranch" maxlength="80" value="${s.bankBranch}" placeholder="Colombo 07"></label>
+              <label class="field"><span class="field-label">Account name</span><input name="accountName" maxlength="120" value="${s.accountName}"></label>
+              <label class="field"><span class="field-label">Account number</span><input name="accountNumber" maxlength="40" value="${s.accountNumber}" inputmode="numeric"></label>
+              <label class="field span-2"><span class="field-label">Extra payment note <span class="optional">(optional)</span></span><textarea name="bankDetails" rows="2" maxlength="1000" placeholder="For example: we also accept transfers to our BOC account 1234567">${s.bankDetails}</textarea></label>
+            </div>
           </section>
         </div>
         <div class="admin-form-side">
@@ -70,12 +74,12 @@ export default function settingsPage(view, ctx) {
       email: text("email"), address: text("address"), bankDetails: text("bankDetails"),
       deliveryFee: Number(f.get("deliveryFee") || 0),
       freeDeliveryOver: f.get("freeDeliveryOver") ? Number(f.get("freeDeliveryOver")) : null,
-      codEnabled: !!f.get("codEnabled"), bankEnabled: !!f.get("bankEnabled"), onlineEnabled: !!f.get("onlineEnabled"), pickupEnabled: !!f.get("pickupEnabled"),
+      bankName: text("bankName"), bankBranch: text("bankBranch"), accountName: text("accountName"), accountNumber: text("accountNumber"),
+      pickupEnabled: !!f.get("pickupEnabled"),
       themeMode: text("themeMode"), themeAccent: text("themeAccent"),
     };
     const errBox = $("[data-error]", view), btn = $("[data-save]", view);
     const fail = (msg) => { errBox.textContent = msg; errBox.hidden = false; window.scrollTo({ top: 0, behavior: "smooth" }); };
-    if (!body.codEnabled && !body.bankEnabled && !body.onlineEnabled) return fail("Turn on at least one payment method so customers can order.");
     btn.disabled = true; btn.textContent = "Saving…"; errBox.hidden = true;
     try {
       await api.admin.saveSettings(body);

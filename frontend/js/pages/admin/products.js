@@ -45,7 +45,7 @@ export default function adminProducts(view, ctx) {
           action: html`<a href="/admin/products/new" class="btn btn-primary">Add your first product</a>`,
         })}</div>`
       : html`<div class="panel panel-flush"><div class="table-scroll"><table class="table">
-          <thead><tr><th>Product</th><th>Category</th><th class="num">Price</th><th class="num">Stock</th><th>Try-on</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
+          <thead><tr><th>Product</th><th>Category</th><th class="num">Price</th><th class="num">Stock</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr></thead>
           <tbody>${data.items.map((p) => html`<tr class="${p.isActive ? "" : "is-hidden-row"}">
             <td><div class="cell-product">
               <span class="table-thumb">${productImage(p.images[0]?.url, "", { type: p.jewelleryType, iconSize: 24 })}</span>
@@ -54,7 +54,6 @@ export default function adminProducts(view, ctx) {
             <td>${p.category?.name}</td>
             <td class="num">${lkr(p.price)}</td>
             <td class="num"><span class="${p.stock === 0 ? "stock-num-out" : p.stock <= 3 ? "stock-num-low" : ""}">${p.stock}</span></td>
-            <td>${p.tryOnEnabled ? html`<span class="pill pill-on">On</span>` : html`<span class="pill pill-off">Off</span>`}</td>
             <td>${p.isActive ? html`<span class="pill pill-on">In shop</span>` : html`<span class="pill pill-off">Hidden</span>`}</td>
             <td><div class="row-actions">
               <a href="/admin/products/${p.id}" class="icon-btn" aria-label="Edit ${p.name}">${icon("edit", 18)}</a>

@@ -138,7 +138,6 @@ export function productCard(p) {
     </div>
     <div class="pcard-actions">
       <button class="btn btn-primary btn-sm pcard-add" data-add-to-cart="${p.id}" data-name="${p.name}"${attr("disabled", soldOut)}>${soldOut ? "Sold out" : "Add to cart"}</button>
-      ${p.tryOnEnabled && html`<a href="/try-on?products=${p.id}" class="btn btn-quiet btn-sm pcard-try" aria-label="Try on ${p.name} with AI" title="Try on with AI">${icon("sparkle", 18)}</a>`}
     </div>
   </article>`;
 }
@@ -230,24 +229,33 @@ export function barChart(bars, caption, height = 240) {
 }
 
 /* ---------- Orders (customer view) ---------- */
-// Bank transfer and online orders are confirmed once the payment is received.
+// Orders are confirmed once the bank transfer is received. (Older cash on delivery
+// orders were confirmed by the shop instead.)
 export const awaitingPayment = (o) => o.status === "PENDING" && o.paymentMethod !== "COD" && o.paymentStatus !== "PAID";
+export const slipSent = (o) => awaitingPayment(o) && !!o.paymentSlipUrl;
 export const isConfirmed = (o) => o.status !== "PENDING" && o.status !== "CANCELLED";
 
 export function orderNotice(order) {
-  const s = state.settings;
   if (order.status === "CANCELLED") return "";
   if (isConfirmed(order)) {
     return html`<div class="notice notice-ok" role="status">${icon("check", 22)}
       <div><strong>Your order is confirmed</strong><p>${order.paymentStatus === "PAID" ? `Payment of ${lkr(order.total)} received. ` : ""}We're getting your pieces ready.</p></div>
     </div>`;
   }
+  if (slipSent(order)) {
+    return html`<div class="notice notice-info" role="status">${icon("clock", 22)}
+      <div>
+        <strong>We're checking your payment</strong>
+        <p>We received your payment slip${order.paymentSlipAt ? ` on ${dateTime(order.paymentSlipAt)}` : ""}. Your order is confirmed as soon as the transfer reaches our account.</p>
+      </div>
+    </div>`;
+  }
   if (awaitingPayment(order)) {
     return html`<div class="notice notice-warn" role="status">${icon("clock", 22)}
       <div>
         <strong>Waiting for your payment</strong>
-        <p>Transfer <strong>${lkr(order.total)}</strong> with <strong>${order.orderNo}</strong> as the reference and send us the slip. Your order is confirmed as soon as we receive it.</p>
-        ${order.paymentMethod === "BANK_TRANSFER" && (s.bankDetails ? html`<div class="bank-box">${s.bankDetails}</div>` : html`<p class="muted">We'll send you our bank details on WhatsApp.</p>`)}
+        <p>Transfer <strong>${lkr(order.total)}</strong> with <strong>${order.orderNo}</strong> as the reference, then upload the slip. Your order is confirmed as soon as we receive it.</p>
+        <a href="/pay/${order.orderNo}" class="btn btn-primary btn-sm" style="margin-top: 10px">${icon("bank", 16)}Pay now</a>
       </div>
     </div>`;
   }

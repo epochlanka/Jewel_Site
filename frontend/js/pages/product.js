@@ -59,11 +59,6 @@ export default async function product(view, ctx) {
 
         <div class="pdp-buy">
           <div class="pdp-buy-row" data-buy>${buyRow()}</div>
-          ${p.tryOnEnabled && html`<a href="/try-on?products=${p.id}" class="try-cta">
-            <span class="try-cta-icon">${icon("sparkle", 22)}</span>
-            <span><strong>Try it on with AI</strong><span>See it on a model or on your own photo</span></span>
-            ${icon("chevronRight")}
-          </a>`}
         </div>
 
         <div class="pdp-actions"><span data-wish-slot>${wishButton()}</span><button class="btn btn-quiet btn-sm" data-act="share">${icon("share", 18)}Share</button></div>

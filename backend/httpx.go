@@ -283,8 +283,8 @@ func formImage(r *http.Request, key string) (*multipart.FileHeader, error) {
 // saveUpload stores the file in the upload folder and returns the URL it is served from.
 func (a *App) saveUpload(fh *multipart.FileHeader) (string, error) {
 	ext := strings.ToLower(filepath.Ext(fh.Filename))
-	if !oneOf(ext, ".jpg", ".jpeg", ".png", ".webp") {
-		ext = imageExt[fh.Header.Get("Content-Type")]
+	if !oneOf(ext, ".jpg", ".jpeg", ".png", ".webp", ".pdf") {
+		ext = slipExt[fh.Header.Get("Content-Type")]
 	}
 	name := fmt.Sprintf("%d-%d%s", time.Now().UnixMilli(), randInt(1e9), ext)
 	src, err := fh.Open()

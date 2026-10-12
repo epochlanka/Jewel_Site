@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -71,6 +72,9 @@ type Order struct {
 	DeliveryFee    int         `json:"deliveryFee"`
 	Total          int         `json:"total"`
 	Status         string      `json:"status"`
+	PaymentSlipURL *string     `json:"paymentSlipUrl"`
+	PaymentRef     *string     `json:"paymentRef"`
+	PaymentSlipAt  *string     `json:"paymentSlipAt"`
 	CreatedAt      string      `json:"createdAt"`
 	Items          []OrderItem `json:"items,omitempty"`
 	History        []StatusLog `json:"history,omitempty"`
@@ -83,13 +87,16 @@ type Order struct {
 }
 
 const orderCols = `o.id, o.order_no, o.user_id, o.full_name, o.mobile, o.whatsapp, o.email, o.address, o.city, o.postal_code, o.note,
-  o.delivery_method, o.payment_method, o.payment_status, o.subtotal, o.delivery_fee, o.total, o.status, o.created_at`
+  o.delivery_method, o.payment_method, o.payment_status, o.subtotal, o.delivery_fee, o.total, o.status,
+  o.payment_slip_url, o.payment_ref, o.payment_slip_at, o.created_at`
 
 func scanOrder(sc interface{ Scan(...any) error }) (Order, error) {
 	var o Order
-	var uid, wa, email, addr, city, postal, note sql.NullString
+	var uid, wa, email, addr, city, postal, note, slip, ref, slipAt sql.NullString
 	err := sc.Scan(&o.ID, &o.OrderNo, &uid, &o.FullName, &o.Mobile, &wa, &email, &addr, &city, &postal, &note,
-		&o.DeliveryMethod, &o.PaymentMethod, &o.PaymentStatus, &o.Subtotal, &o.DeliveryFee, &o.Total, &o.Status, &o.CreatedAt)
+		&o.DeliveryMethod, &o.PaymentMethod, &o.PaymentStatus, &o.Subtotal, &o.DeliveryFee, &o.Total, &o.Status,
+		&slip, &ref, &slipAt, &o.CreatedAt)
+	o.PaymentSlipURL, o.PaymentRef, o.PaymentSlipAt = strPtr(slip), strPtr(ref), strPtr(slipAt)
 	o.UserID, o.Whatsapp, o.Email, o.Address, o.City, o.PostalCode, o.Note = strPtr(uid), strPtr(wa), strPtr(email), strPtr(addr), strPtr(city), strPtr(postal), strPtr(note)
 	return o, err
 }
@@ -178,8 +185,8 @@ func (a *App) orderDetail(ctx context.Context, where string, args ...any) (*Orde
 	return &list[0], nil
 }
 
-// Bank transfer and online orders are confirmed only after the payment is received.
-// Cash on delivery is paid at the door, so those orders are confirmed by the shop.
+// Orders are confirmed once the payment is received. (Cash on delivery orders from
+// before bank transfer became the only method are confirmed by the shop.)
 func needsPaymentFirst(o *Order) bool { return o.PaymentMethod != "COD" && o.PaymentStatus != "PAID" }
 
 func allowedNext(o *Order) []string {
@@ -238,18 +245,22 @@ func readCheckout(b body) (*checkoutInput, error) {
 	if err != nil {
 		return nil, err
 	}
-	if email != "" {
-		if !validEmail(email) {
-			return nil, badField("email", "Enter a valid email")
-		}
-		in.Email = &email
+	// Email is required: the order confirmation and tracking details are sent there.
+	if email == "" {
+		return nil, badField("email", "Enter your email so we can send your order confirmation")
 	}
+	if !validEmail(email) {
+		return nil, badField("email", "Enter a valid email")
+	}
+	in.Email = &email
 	if in.DeliveryMethod, err = text("deliveryMethod"); err != nil || !oneOf(in.DeliveryMethod, "DELIVERY", "PICKUP") {
 		return nil, badField("deliveryMethod", "")
 	}
-	if in.PaymentMethod, err = text("paymentMethod"); err != nil || !oneOf(in.PaymentMethod, "BANK_TRANSFER", "COD", "ONLINE") {
+	// Bank transfer is the only payment method.
+	if in.PaymentMethod, err = text("paymentMethod"); err != nil || !oneOf(in.PaymentMethod, "", "BANK_TRANSFER") {
 		return nil, badField("paymentMethod", "")
 	}
+	in.PaymentMethod = "BANK_TRANSFER"
 	return in, nil
 }
 
@@ -275,9 +286,6 @@ func (a *App) placeOrder(ctx context.Context, cartID string, userID *string, in 
 	}
 	if in.DeliveryMethod == "PICKUP" && !s.PickupEnabled {
 		return "", httpErr(http.StatusBadRequest, "Store pickup isn't available right now.")
-	}
-	if on := map[string]bool{"COD": s.CodEnabled, "BANK_TRANSFER": s.BankEnabled, "ONLINE": s.OnlineEnabled}[in.PaymentMethod]; !on {
-		return "", httpErr(http.StatusBadRequest, "That payment method isn't available. Choose another one.")
 	}
 	offers, err := activeOffers(ctx, a.db)
 	if err != nil {
@@ -490,4 +498,69 @@ func (a *App) setPayment(ctx context.Context, orderID, paymentStatus string) (*O
 		go a.notifyPaymentConfirmed(*o)
 	}
 	return o, nil
+}
+
+// ---------- Payment slip ----------
+
+var slipExt = map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "application/pdf": ".pdf"}
+
+// POST /api/orders/{orderNo}/payment-slip (multipart: mobile, reference?, slip)
+// The customer uploads the bank transfer slip. Guests prove the order is theirs
+// with the mobile number used at checkout, as on the tracking page.
+func (a *App) uploadPaymentSlip(w http.ResponseWriter, r *http.Request) error {
+	if err := parseMultipart(w, r); err != nil {
+		return err
+	}
+	ctx := r.Context()
+	mobile, _ := formValue(r, "mobile")
+	where, args := "o.order_no = ? AND o.mobile = ?", []any{r.PathValue("orderNo"), strings.TrimSpace(mobile)}
+	if u := a.currentUser(r); u != nil && strings.TrimSpace(mobile) == "" {
+		where, args = "o.order_no = ? AND o.user_id = ?", []any{r.PathValue("orderNo"), u.ID}
+	}
+	o, err := a.orderDetail(ctx, where, args...)
+	if err != nil {
+		return err
+	}
+	if o == nil {
+		return httpErr(http.StatusNotFound, "No order matches that order number and mobile number.")
+	}
+	if o.PaymentMethod != "BANK_TRANSFER" || o.PaymentStatus != "UNPAID" || o.Status != "PENDING" {
+		return httpErr(http.StatusConflict, "This order doesn't need a payment slip.")
+	}
+
+	ref, _ := formValue(r, "reference")
+	ref = strings.TrimSpace(ref)
+	if len([]rune(ref)) > 60 {
+		return badField("reference", "Keep the reference under 60 characters")
+	}
+	var slip *multipart.FileHeader
+	if files := r.MultipartForm.File["slip"]; len(files) > 0 {
+		slip = files[0]
+	}
+	if slip == nil {
+		return badField("slip", "Choose a photo or PDF of your payment slip.")
+	}
+	if slipExt[slip.Header.Get("Content-Type")] == "" {
+		return badField("slip", "Upload the slip as a JPG, PNG, WebP or PDF file.")
+	}
+	if slip.Size > maxUpload {
+		return badField("slip", "That file is over 8 MB. Choose a smaller one.")
+	}
+	url, err := a.saveUpload(slip)
+	if err != nil {
+		return err
+	}
+	var refArg any
+	if ref != "" {
+		refArg = ref
+	}
+	if _, err := a.db.ExecContext(ctx, `UPDATE orders SET payment_slip_url = ?, payment_ref = ?, payment_slip_at = ? WHERE id = ?`, url, refArg, nowTS(), o.ID); err != nil {
+		return err
+	}
+	o, err = a.orderDetail(ctx, "o.id = ?", o.ID)
+	if err != nil {
+		return err
+	}
+	go a.notifySlipReceived(*o)
+	return ok(w, o)
 }

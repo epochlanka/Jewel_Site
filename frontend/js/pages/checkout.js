@@ -1,21 +1,13 @@
 import { html, attr, setHtml, on, $ } from "../html.js";
 import { icon } from "../icons.js";
 import { api, ApiError } from "../api.js";
-import { lkr, paymentLabel } from "../format.js";
-import { state, subscribe, refreshCart } from "../store.js";
+import { lkr } from "../format.js";
+import { state, subscribe, refreshCart, rememberOrder } from "../store.js";
 import { freeDeliveryBar, pageLoading, productImage } from "../ui.js";
 import { navigate } from "../router.js";
 
-const paymentInfo = {
-  COD: { icon: "cash", note: "Pay in cash when your order arrives." },
-  BANK_TRANSFER: { icon: "bank", note: "Transfer the total and send us the slip on WhatsApp." },
-  ONLINE: { icon: "card", note: "Pay securely by card." },
-};
-
 export default function checkout(view, ctx) {
-  let delivery = "DELIVERY", payment = "", busy = false, drawn = false;
-
-  const methods = () => ["COD", "BANK_TRANSFER", "ONLINE"].filter((m) => ({ COD: state.settings.codEnabled, BANK_TRANSFER: state.settings.bankEnabled, ONLINE: state.settings.onlineEnabled })[m]);
+  let delivery = "DELIVERY", busy = false, drawn = false;
 
   // The form is drawn once so typed details are kept; the summary and the
   // method-dependent parts are redrawn in place.
@@ -23,7 +15,6 @@ export default function checkout(view, ctx) {
     const cart = state.cart;
     if (!cart) return setHtml(view, pageLoading());
     if (!cart.items.length && !busy) return navigate("/cart", { replace: true });
-    if (!payment || !methods().includes(payment)) payment = methods()[0] ?? "";
     if (drawn) return drawParts();
     drawn = true;
     const u = state.user;
@@ -40,7 +31,7 @@ export default function checkout(view, ctx) {
               <label class="field span-2"><span class="field-label">Full name</span><input name="fullName" required minlength="2" autocomplete="name" value="${u?.name ?? ""}"></label>
               <label class="field"><span class="field-label">Mobile number</span><input name="mobile" type="tel" required pattern="0\\d{9}" placeholder="07XXXXXXXX" autocomplete="tel" inputmode="tel" value="${u?.phone ?? ""}"><span class="field-hint">We'll call or message about your order</span></label>
               <label class="field"><span class="field-label">WhatsApp number <span class="optional">(optional)</span></span><input name="whatsapp" type="tel" placeholder="If different from mobile" inputmode="tel"></label>
-              <label class="field span-2"><span class="field-label">Email <span class="optional">(optional)</span></span><input name="email" type="email" autocomplete="email" value="${u?.email ?? ""}"></label>
+              <label class="field span-2"><span class="field-label">Email</span><input name="email" type="email" required autocomplete="email" value="${u?.email ?? ""}"><span class="field-hint">We'll email your order confirmation and order number here</span></label>
             </div>
           </section>
 
@@ -57,7 +48,10 @@ export default function checkout(view, ctx) {
 
           <section class="checkout-section" aria-labelledby="co-payment">
             <h2 id="co-payment"><span class="checkout-num">3</span>Payment</h2>
-            <div data-payment></div>
+            <div class="pay-preview">
+              <span class="pay-method-icon">${icon("bank", 22)}</span>
+              <span><strong>Bank transfer</strong><span class="muted">After you place the order you'll see our bank details. Transfer the total and upload the slip to confirm your order.</span></span>
+            </div>
           </section>
         </div>
 
@@ -68,7 +62,7 @@ export default function checkout(view, ctx) {
   };
 
   const drawParts = () => {
-    const cart = state.cart, s = state.settings, list = methods();
+    const cart = state.cart, s = state.settings;
     const fee = delivery === "DELIVERY" ? cart.deliveryFee : 0;
     const total = cart.subtotal + fee;
 
@@ -89,17 +83,6 @@ export default function checkout(view, ctx) {
     address.hidden = delivery !== "DELIVERY";
     address.querySelectorAll("input, textarea").forEach((el) => { el.disabled = delivery !== "DELIVERY"; });
 
-    setHtml($("[data-payment]", view), list.length ? html`
-      <fieldset class="fieldset"><legend class="sr-only">Payment method</legend><div class="choices">
-        ${list.map((m) => html`<label class="choice">
-          <input type="radio" name="paymentMethod" value="${m}" required${attr("checked", payment === m)}>
-          <span class="choice-dot" aria-hidden="true"></span>
-          <span class="choice-body"><span class="choice-title">${icon(paymentInfo[m].icon, 18)}${paymentLabel[m]}</span><span class="choice-note">${paymentInfo[m].note}</span></span>
-        </label>`)}
-      </div></fieldset>
-      ${payment === "BANK_TRANSFER" && s.bankDetails && html`<div class="bank-box"><strong>Bank details</strong>\n${s.bankDetails}</div>`}`
-      : html`<p class="form-error">No payment methods are available right now. Contact the shop to order.</p>`);
-
     setHtml($("[data-summary]", view), html`
       <h2>Your order</h2>
       <div class="summary-items">${cart.items.map((i) => html`<div class="summary-item">
@@ -111,12 +94,11 @@ export default function checkout(view, ctx) {
       <div class="summary-row"><span>Delivery</span><span>${fee ? lkr(fee) : "Free"}</span></div>
       ${delivery === "DELIVERY" && freeDeliveryBar(cart.subtotal, cart.freeDeliveryOver)}
       <div class="summary-row summary-total"><span>Total</span><span>${lkr(total)}</span></div>
-      <button class="btn btn-primary btn-lg btn-block"${attr("disabled", busy || !list.length)}>${busy ? "Placing order…" : `Place order · ${lkr(total)}`}</button>
-      <p class="summary-note">We'll confirm your order by phone or WhatsApp before it's sent.</p>`);
+      <button class="btn btn-primary btn-lg btn-block"${attr("disabled", busy)}>${busy ? "Placing order…" : html`${icon("lock", 18)}Proceed to pay`}</button>
+      <p class="summary-note">Pay by bank transfer on the next step. Your order is confirmed once we receive your payment.</p>`);
   };
 
   on(view, "change", "[name=deliveryMethod]", (e, el) => { delivery = el.value; drawParts(); });
-  on(view, "change", "[name=paymentMethod]", (e, el) => { payment = el.value; drawParts(); });
   on(view, "submit", "[data-checkout]", async (e, form) => {
     e.preventDefault();
     const errBox = $("[data-error]", view);
@@ -125,9 +107,10 @@ export default function checkout(view, ctx) {
     const body = Object.fromEntries(new FormData(form));
     busy = true; drawParts();
     try {
-      const order = await api.placeOrder(body);
+      const order = await api.placeOrder({ ...body, paymentMethod: "BANK_TRANSFER" });
+      rememberOrder(order);
       await refreshCart();
-      navigate(`/order/${order.orderNo}`, { state: { order }, replace: true });
+      navigate(`/pay/${order.orderNo}`, { state: { order }, replace: true });
     } catch (err) {
       busy = false; drawParts();
       errBox.textContent = err.message;

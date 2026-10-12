@@ -74,18 +74,13 @@ export const api = {
   placeOrder: (b) => req("/orders", json("POST", b)),
   myOrders: () => req("/orders/mine"),
   trackOrder: (orderNo, mobile) => req(`/orders/track?${qs({ orderNo, mobile })}`),
+  uploadSlip: (orderNo, fd) => req(`/orders/${encodeURIComponent(orderNo)}/payment-slip`, { method: "POST", body: fd }),
 
   // Wishlist
   wishlist: () => req("/wishlist"),
   wishlistIds: () => req("/wishlist/ids"),
   addWish: (productId) => req(`/wishlist/${productId}`, json("POST")),
   removeWish: (productId) => req(`/wishlist/${productId}`, json("DELETE")),
-
-  // Try-on
-  aiModels: () => req("/tryon/models"),
-  startTryOn: (fd) => req("/tryon", { method: "POST", body: fd }),
-  tryOnStatus: (id) => req(`/tryon/${id}`),
-  myTryOns: () => req("/tryon/mine"),
 
   admin: {
     dashboard: () => req("/admin/dashboard"),
@@ -96,7 +91,6 @@ export const api = {
     hideProduct: (id) => req(`/products/${id}`, json("DELETE")),
     deleteImage: (productId, imageId) => req(`/products/${productId}/images/${imageId}`, json("DELETE")),
     orderImages: (productId, order) => req(`/products/${productId}/images/order`, json("PUT", { order })),
-    removeTryOnAsset: (productId) => req(`/products/${productId}/try-on-asset`, json("DELETE")),
 
     saveCategory: (fd, id) => req(id ? `/categories/${id}` : "/categories", { method: id ? "PUT" : "POST", body: fd }),
     deleteCategory: (id) => req(`/categories/${id}`, json("DELETE")),
@@ -108,11 +102,6 @@ export const api = {
 
     customers: (f = {}) => req(`/admin/customers?${qs(f)}`),
     customer: (id) => req(`/admin/customers/${id}`),
-
-    aiModels: () => req("/admin/ai-models"),
-    addAiModel: (fd) => req("/admin/ai-models", { method: "POST", body: fd }),
-    updateAiModel: (id, b) => req(`/admin/ai-models/${id}`, json("PATCH", b)),
-    deleteAiModel: (id) => req(`/admin/ai-models/${id}`, json("DELETE")),
 
     offers: () => req("/admin/offers"),
     saveOffer: (b, id) => req(id ? `/admin/offers/${id}` : "/admin/offers", json(id ? "PUT" : "POST", b)),

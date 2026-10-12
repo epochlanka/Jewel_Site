@@ -138,6 +138,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) error {
 	}{
 		{"shopName", "shop_name", 1, 80}, {"tagline", "tagline", 0, 200}, {"phone", "phone", 0, 30}, {"whatsapp", "whatsapp", 0, 30},
 		{"email", "email", 0, 120}, {"address", "address", 0, 300}, {"bankDetails", "bank_details", 0, 1000},
+		{"bankName", "bank_name", 0, 80}, {"bankBranch", "bank_branch", 0, 80}, {"accountName", "account_name", 0, 120}, {"accountNumber", "account_number", 0, 40},
 	}
 	for _, t := range texts {
 		v, has, err := b.str(t.key)
@@ -170,7 +171,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) error {
 		}
 		field("free_delivery_over", int(n))
 	}
-	for _, f := range [][2]string{{"codEnabled", "cod_enabled"}, {"bankEnabled", "bank_enabled"}, {"onlineEnabled", "online_enabled"}, {"pickupEnabled", "pickup_enabled"}} {
+	for _, f := range [][2]string{{"pickupEnabled", "pickup_enabled"}} {
 		if v, has, err := b.boolean(f[0]); err != nil {
 			return err
 		} else if has {

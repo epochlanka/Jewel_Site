@@ -45,24 +45,6 @@ function wishlist(box, ctx) {
   ctx.onCleanup(subscribe((what) => { if (what === "wishlist") draw(); }));
 }
 
-function tryOns(box) {
-  setHtml(box, pageLoading());
-  api.myTryOns().catch(() => []).then((items) => {
-    if (!items.length) return setHtml(box, emptyState({ icon: "sparkle", title: "No try-ons yet", text: "Previews you create while signed in are saved here.", action: html`<a href="/shop?tryOn=1" class="btn btn-primary">Try something on</a>` }));
-    setHtml(box, html`<div class="tryon-grid">${items.map((t) => {
-      const live = t.items.filter((i) => i.product.isActive);
-      return html`<article class="tryon-card">
-        <a href="${t.resultUrl}" target="_blank" rel="noreferrer"><img src="${t.resultUrl}" alt="Try-on of ${t.items.map((i) => i.product.name).join(", ")}"></a>
-        <div class="tryon-card-body">
-          ${t.items.map((i) => (i.product.isActive ? html`<a href="/product/${i.product.slug}">${i.product.name}</a>` : html`<span class="muted">${i.product.name}</span>`))}
-          <span class="muted">${shortDate(t.createdAt)}</span>
-          ${live.length > 0 && html`<a href="/try-on?products=${live.map((i) => i.product.id).join(",")}" class="btn btn-quiet btn-sm" style="margin-top: 6px">Try again</a>`}
-        </div>
-      </article>`;
-    })}</div>`);
-  });
-}
-
 function profile(box) {
   const u = state.user;
   setHtml(box, html`<div class="stack" style="max-width: 560px">
@@ -110,7 +92,6 @@ function profile(box) {
 const tabs = [
   { key: "", label: "My orders", icon: "bag", show: orders },
   { key: "wishlist", label: "Wishlist", icon: "heart", show: wishlist },
-  { key: "try-ons", label: "Saved try-ons", icon: "sparkle", show: tryOns },
   { key: "profile", label: "Profile", icon: "user", show: profile },
 ];
 

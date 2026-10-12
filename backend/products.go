@@ -10,7 +10,7 @@ import (
 
 // ---------- Shop ----------
 
-// GET /api/products?ids=a,b&category=earrings&q=&minPrice=&maxPrice=&style=&colour=&inStock=1&newArrivals=1&onSale=1&type=EARRINGS&tryOn=1&sort=price_asc&page=1&limit=24
+// GET /api/products?ids=a,b&category=earrings&q=&minPrice=&maxPrice=&style=&colour=&inStock=1&newArrivals=1&onSale=1&type=EARRINGS&sort=price_asc&page=1&limit=24
 func (a *App) listProducts(w http.ResponseWriter, r *http.Request) error {
 	ctx, qs := r.Context(), r.URL.Query()
 	page, err := queryInt(r, "page", 1, 1, math32)
@@ -61,9 +61,6 @@ func (a *App) listProducts(w http.ResponseWriter, r *http.Request) error {
 			return badField("type", "")
 		}
 		add("p.jewellery_type = ?", v)
-	}
-	if qs.Get("tryOn") != "" {
-		add("p.try_on_enabled = 1")
 	}
 	if v := qs.Get("ids"); v != "" {
 		var ids []string
@@ -290,7 +287,7 @@ func readProductForm(r *http.Request, partial bool) (*productInput, error) {
 	for _, f := range []struct {
 		key, col string
 		def      bool
-	}{{"tryOnEnabled", "try_on_enabled", true}, {"isNewArrival", "is_new_arrival", false}, {"isActive", "is_active", true}} {
+	}{{"isNewArrival", "is_new_arrival", false}, {"isActive", "is_active", true}} {
 		if v, has := get(f.key); has {
 			field(f.col, boolInt(truthy(v)))
 		} else if !partial {
@@ -354,20 +351,9 @@ func (a *App) createProduct(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	asset, err := formImage(r, "tryOnAsset")
-	if err != nil {
-		return err
-	}
 	id := newID()
 	cols := append([]string{"id", "slug", "created_at"}, in.set...)
 	args := append([]any{id, slugify(in.name) + "-" + slugify(in.code), nowTS()}, in.args...)
-	if asset != nil {
-		url, err := a.saveUpload(asset)
-		if err != nil {
-			return err
-		}
-		cols, args = append(cols, "try_on_asset_url"), append(args, url)
-	}
 	var urls []string
 	for _, fh := range images {
 		url, err := a.saveUpload(fh)
@@ -419,17 +405,6 @@ func (a *App) updateProduct(w http.ResponseWriter, r *http.Request) error {
 	images, err := formImages(r, "images", 10)
 	if err != nil {
 		return err
-	}
-	asset, err := formImage(r, "tryOnAsset")
-	if err != nil {
-		return err
-	}
-	if asset != nil {
-		url, err := a.saveUpload(asset)
-		if err != nil {
-			return err
-		}
-		in.set, in.args = append(in.set, "try_on_asset_url"), append(in.args, url)
 	}
 	var urls []string
 	for _, fh := range images {
@@ -499,10 +474,6 @@ func (a *App) deleteImage(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	return noContent(w)
-}
-
-func (a *App) removeTryOnAsset(w http.ResponseWriter, r *http.Request) error {
-	return a.execOne(w, r, `UPDATE products SET try_on_asset_url = NULL WHERE id = ?`, r.PathValue("id"))
 }
 
 // Hiding keeps order history intact; the product can be shown again from the edit form.

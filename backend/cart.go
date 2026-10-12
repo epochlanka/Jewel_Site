@@ -56,13 +56,13 @@ func cartView(ctx context.Context, q querier, cartID string) (CartView, error) {
 	for rows.Next() {
 		var it CartItem
 		var p Product
-		var desc, style, colour, asset sql.NullString
+		var desc, style, colour sql.NullString
 		if err := rows.Scan(&it.ID, &it.Qty, &p.ID, &p.Code, &p.Name, &p.Slug, &desc, &p.Price, &p.Stock, &p.IsActive, &p.IsNewArrival,
-			&style, &colour, &p.JewelleryType, &p.TryOnEnabled, &asset, &p.CategoryID, &p.CreatedAt); err != nil {
+			&style, &colour, &p.JewelleryType, &p.CategoryID, &p.CreatedAt); err != nil {
 			rows.Close()
 			return CartView{}, err
 		}
-		p.Description, p.Style, p.Colour, p.TryOnAssetURL = strPtr(desc), strPtr(style), strPtr(colour), strPtr(asset)
+		p.Description, p.Style, p.Colour = strPtr(desc), strPtr(style), strPtr(colour)
 		p.Images = []Image{}
 		items = append(items, it)
 		products = append(products, p)

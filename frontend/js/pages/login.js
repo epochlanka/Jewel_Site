@@ -1,10 +1,9 @@
-import { html, setHtml, on, $ } from "../html.js";
-import { api } from "../api.js";
+import { html, setHtml, on } from "../html.js";
 import { state, login } from "../store.js";
 import { passwordInput } from "../ui.js";
 import { navigate } from "../router.js";
 
-// Two-column frame for the sign-in pages: a model photo with a short pitch, and the form.
+// Two-column frame for the sign-in pages: a short pitch beside the form.
 export function authShell(view, { title, subtitle, aside, body }) {
   setHtml(view, html`<div class="auth">
     <aside class="auth-aside">
@@ -13,13 +12,6 @@ export function authShell(view, { title, subtitle, aside, body }) {
     </aside>
     <main class="auth-main"><div class="auth-card"><h1>${title}</h1><p class="auth-sub">${subtitle}</p>${body}</div></main>
   </div>`);
-  api.aiModels().then((m) => {
-    const photo = m[1]?.imageUrl ?? m[0]?.imageUrl;
-    const side = $(".auth-aside", view);
-    if (!photo || !side) return;
-    side.classList.add("has-photo");
-    side.insertAdjacentHTML("afterbegin", html`<img class="auth-photo" src="${photo}" alt="">`.s);
-  }).catch(() => undefined);
 }
 
 // Runs a sign-in form: shows "busy" on the button and the server's message on failure.
@@ -47,8 +39,8 @@ export default function loginPage(view, ctx) {
   const from = ctx.state?.from ?? "/";
   authShell(view, {
     title: "Sign in",
-    subtitle: "Welcome back. Sign in to see your orders and saved try-ons.",
-    aside: html`<h2>See it on before you buy</h2><p>Try any piece on a model or your own photo, then order in a few taps.</p>`,
+    subtitle: "Welcome back. Sign in to see your orders and wishlist.",
+    aside: html`<h2>Jewellery for every occasion</h2><p>Track your orders, keep a wishlist and check out in a few taps.</p>`,
     body: html`
       <form class="form" data-auth>
         <label class="field"><span class="field-label">Email</span><input name="email" type="email" required autocomplete="email"></label>

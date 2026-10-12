@@ -8,8 +8,8 @@ export default function registerPage(view, ctx) {
   const from = ctx.state?.from ?? "/";
   authShell(view, {
     title: "Create your account",
-    subtitle: "Track orders, keep a wishlist and save your AI try-ons.",
-    aside: html`<h2>Your jewellery, your way</h2><p>Mix earrings, necklaces and bangles into a full look, and see it on before you order.</p>`,
+    subtitle: "Track orders and keep a wishlist of your favourites.",
+    aside: html`<h2>Your jewellery, your way</h2><p>Save pieces you love and order them whenever you are ready.</p>`,
     body: html`
       <form class="form" data-auth>
         <label class="field"><span class="field-label">Full name</span><input name="name" required minlength="2" autocomplete="name"></label>

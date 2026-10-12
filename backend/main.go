@@ -3,7 +3,7 @@
 //
 //	go run .                  start the server
 //	go run . seed             add the admin account, categories and shop settings
-//	go run . seed-demo        add demo products, model photos and an offer
+//	go run . seed-demo        add demo products, category photos and an offer
 //	go run . seed-demo --remove   take the demo content out again
 package main
 
@@ -20,9 +20,8 @@ import (
 )
 
 type App struct {
-	cfg  Config
-	db   *sql.DB
-	wake chan struct{}
+	cfg Config
+	db  *sql.DB
 }
 
 func randInt(n int64) int64 {
@@ -61,7 +60,6 @@ func main() {
 	if err := os.MkdirAll(cfg.UploadDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	a.startTryOnWorker()
 	srv := &http.Server{
 		Addr:              "0.0.0.0:" + cfg.Port,
 		Handler:           a.routes(),
@@ -97,7 +95,6 @@ func (a *App) routes() http.Handler {
 	admin("PUT /api/products/{id}", a.updateProduct)
 	admin("PUT /api/products/{id}/images/order", a.orderImages)
 	admin("DELETE /api/products/{id}/images/{imageId}", a.deleteImage)
-	admin("DELETE /api/products/{id}/try-on-asset", a.removeTryOnAsset)
 	admin("DELETE /api/products/{id}", a.hideProduct)
 
 	route("GET /api/cart", a.getCart)
@@ -109,11 +106,7 @@ func (a *App) routes() http.Handler {
 	route("POST /api/orders", a.createOrder)
 	route("GET /api/orders/mine", a.myOrders)
 	route("GET /api/orders/track", a.trackOrder)
-
-	route("GET /api/tryon/models", a.tryOnModels)
-	route("POST /api/tryon", a.startTryOn)
-	route("GET /api/tryon/mine", a.myTryOns)
-	route("GET /api/tryon/{id}", a.tryOnStatus)
+	route("POST /api/orders/{orderNo}/payment-slip", a.uploadPaymentSlip)
 
 	route("GET /api/wishlist", a.wishlist)
 	route("GET /api/wishlist/ids", a.wishlistIDs)
@@ -132,10 +125,6 @@ func (a *App) routes() http.Handler {
 	admin("PATCH /api/admin/orders/{id}/payment", a.adminSetPayment)
 	admin("GET /api/admin/customers", a.adminCustomers)
 	admin("GET /api/admin/customers/{id}", a.adminCustomer)
-	admin("GET /api/admin/ai-models", a.adminAiModels)
-	admin("POST /api/admin/ai-models", a.addAiModel)
-	admin("PATCH /api/admin/ai-models/{id}", a.updateAiModel)
-	admin("DELETE /api/admin/ai-models/{id}", a.deleteAiModel)
 	admin("GET /api/admin/offers", a.adminOffers)
 	admin("POST /api/admin/offers", a.saveOffer)
 	admin("PUT /api/admin/offers/{id}", a.saveOffer)

@@ -90,13 +90,6 @@ var demoCategoryPhotos = map[string]string{
 	"hair-accessories": "1603974372039-adc49044b6bd", "fancy-jewellery": "1641290748359-1d944fc8359a",
 }
 
-var demoModels = [][2]string{
-	{"Demo model 1", "1763578590148-fbac0711f3b2"},
-	{"Demo model 2", "1779475546066-742c9a580de1"},
-	{"Demo model 3", "1688382654723-a7366006519b"},
-	{"Demo model 4", "1620656798579-1984d9e87df7"},
-}
-
 const demoOfferTitle = "Demo offer: bangles week"
 
 func (a *App) seedDemo() error {
@@ -119,10 +112,10 @@ func (a *App) seedDemo() error {
 			created := ts(time.Now().Add(-time.Duration(len(demoProducts)-i) * time.Minute))
 			var id string
 			err = tx.QueryRowContext(ctx, `INSERT INTO products (id, code, name, slug, description, price, stock, is_active, is_new_arrival, style, colour,
-			  jewellery_type, try_on_enabled, category_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, 1, ?, ?)
+			  jewellery_type, category_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
 			  ON CONFLICT (code) DO UPDATE SET name = excluded.name, description = excluded.description, price = excluded.price, stock = excluded.stock,
 			  is_active = 1, is_new_arrival = excluded.is_new_arrival, style = excluded.style, colour = excluded.colour,
-			  jewellery_type = excluded.jewellery_type, try_on_enabled = 1, category_id = excluded.category_id
+			  jewellery_type = excluded.jewellery_type, category_id = excluded.category_id
 			  RETURNING id`,
 				newID(), code, p.name, slugify(p.name)+"-"+slugify(code), p.description, p.price, p.stock, boolInt(p.isNew), p.style, p.colour, p.typ, catID, created).Scan(&id)
 			if err != nil {
@@ -139,18 +132,6 @@ func (a *App) seedDemo() error {
 		for slug, photo := range demoCategoryPhotos {
 			if _, err := tx.ExecContext(ctx, `UPDATE categories SET image_url = ? WHERE slug = ? AND image_url IS NULL`, unsplash(photo, 300), slug); err != nil {
 				return err
-			}
-		}
-		for i, m := range demoModels {
-			res, err := tx.ExecContext(ctx, `UPDATE ai_models SET image_url = ?, is_active = 1 WHERE name = ?`, unsplash(m[1], 800), m[0])
-			if err != nil {
-				return err
-			}
-			if n, _ := res.RowsAffected(); n == 0 {
-				created := ts(time.Now().Add(time.Duration(i-len(demoModels)) * time.Second))
-				if _, err := tx.ExecContext(ctx, `INSERT INTO ai_models (id, name, image_url, is_active, created_at) VALUES (?, ?, ?, 1, ?)`, newID(), m[0], unsplash(m[1], 800), created); err != nil {
-					return err
-				}
 			}
 		}
 		var bangles string
@@ -174,7 +155,7 @@ func (a *App) seedDemo() error {
 	if skipped > 0 {
 		note = fmt.Sprintf(" (%d skipped)", skipped)
 	}
-	log.Printf("Demo content ready: %d products%s, %d AI models, category photos and one offer.", added, note, len(demoModels))
+	log.Printf("Demo content ready: %d products%s, category photos and one offer.", added, note)
 	log.Println("Remove it later with: go run . seed-demo --remove")
 	return nil
 }
@@ -184,7 +165,7 @@ func (a *App) removeDemo() error {
 	deleted, hidden := 0, 0
 	err := withTx(ctx, a.db, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT id,
-		  (SELECT COUNT(*) FROM order_items oi WHERE oi.product_id = p.id) + (SELECT COUNT(*) FROM try_on_items ti WHERE ti.product_id = p.id)
+		  (SELECT COUNT(*) FROM order_items oi WHERE oi.product_id = p.id)
 		  FROM products p WHERE code LIKE ?`, demoPrefix+"%")
 		if err != nil {
 			return err
@@ -210,7 +191,7 @@ func (a *App) removeDemo() error {
 				}
 			}
 			if d.used > 0 {
-				// Keep products that appear in orders or try-ons so history stays intact; just hide them.
+				// Keep products that appear in orders so history stays intact; just hide them.
 				if _, err := tx.ExecContext(ctx, `UPDATE products SET is_active = 0 WHERE id = ?`, d.id); err != nil {
 					return err
 				}
@@ -227,20 +208,12 @@ func (a *App) removeDemo() error {
 				return err
 			}
 		}
-		for _, m := range demoModels {
-			if _, err := tx.ExecContext(ctx, `UPDATE ai_models SET is_active = 0 WHERE name = ? AND id IN (SELECT ai_model_id FROM try_ons WHERE ai_model_id IS NOT NULL)`, m[0]); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM ai_models WHERE name = ? AND id NOT IN (SELECT ai_model_id FROM try_ons WHERE ai_model_id IS NOT NULL)`, m[0]); err != nil {
-				return err
-			}
-		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM offers WHERE title = ?`, demoOfferTitle)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	log.Printf("Demo content removed: %d products deleted, %d hidden because they appear in orders or try-ons.", deleted, hidden)
+	log.Printf("Demo content removed: %d products deleted, %d hidden because they appear in orders.", deleted, hidden)
 	return nil
 }
