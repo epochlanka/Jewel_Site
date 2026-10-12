@@ -81,6 +81,7 @@ func (a *App) routes() http.Handler {
 	route("GET /api/auth/me", a.me)
 	route("PATCH /api/auth/me", a.updateMe)
 	route("POST /api/auth/password", a.changePassword)
+	route("PATCH /api/auth/account", a.updateAccount)
 
 	route("GET /api/categories", a.categories)
 	admin("POST /api/categories", a.saveCategory)
@@ -91,6 +92,7 @@ func (a *App) routes() http.Handler {
 	route("GET /api/products/filters", a.productFilters)
 	route("GET /api/products/{slug}", a.productBySlug)
 	route("GET /api/products/{slug}/related", a.relatedProducts)
+	route("GET /api/products/{slug}/bookings", a.productBookings)
 	admin("POST /api/products", a.createProduct)
 	admin("PUT /api/products/{id}", a.updateProduct)
 	admin("PUT /api/products/{id}/images/order", a.orderImages)
@@ -99,8 +101,8 @@ func (a *App) routes() http.Handler {
 
 	route("GET /api/cart", a.getCart)
 	route("POST /api/cart/items", a.addToCart)
-	route("PATCH /api/cart/items/{productId}", a.setCartQty)
-	route("DELETE /api/cart/items/{productId}", a.removeCartItem)
+	route("PATCH /api/cart/items/{itemId}", a.setCartQty)
+	route("DELETE /api/cart/items/{itemId}", a.removeCartItem)
 	route("POST /api/cart/merge", a.mergeCart)
 
 	route("POST /api/orders", a.createOrder)
@@ -123,6 +125,8 @@ func (a *App) routes() http.Handler {
 	admin("GET /api/admin/orders/{id}", a.adminOrder)
 	admin("PATCH /api/admin/orders/{id}/status", a.adminSetStatus)
 	admin("PATCH /api/admin/orders/{id}/payment", a.adminSetPayment)
+	admin("PATCH /api/admin/orders/{id}/rental-returned", a.markRentalReturned)
+	admin("GET /api/admin/rentals", a.adminRentals)
 	admin("GET /api/admin/customers", a.adminCustomers)
 	admin("GET /api/admin/customers/{id}", a.adminCustomer)
 	admin("GET /api/admin/offers", a.adminOffers)

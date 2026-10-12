@@ -56,6 +56,7 @@ export const api = {
   me: () => req("/auth/me"),
   updateMe: (b) => req("/auth/me", json("PATCH", b)),
   changePassword: (current, next) => req("/auth/password", json("POST", { current, next })),
+  updateAccount: (b) => req("/auth/account", json("PATCH", b)),
   mergeCart: () => req("/cart/merge", json("POST", { guestKey: cartKey() })),
 
   // Shop
@@ -65,12 +66,14 @@ export const api = {
   productFilters: () => req("/products/filters"),
   product: (slug) => req(`/products/${encodeURIComponent(slug)}`),
   related: (slug) => req(`/products/${encodeURIComponent(slug)}/related`),
+  bookings: (slug) => req(`/products/${encodeURIComponent(slug)}/bookings`),
 
   // Cart & orders
   cart: () => req("/cart"),
   addToCart: (items) => req("/cart/items", json("POST", { items })),
-  setQty: (productId, qty) => req(`/cart/items/${productId}`, json("PATCH", { qty })),
-  removeItem: (productId) => req(`/cart/items/${productId}`, json("DELETE")),
+  // Cart lines are addressed by their own id: a piece can be in the cart in two sizes or for two rentals.
+  setQty: (itemId, qty) => req(`/cart/items/${itemId}`, json("PATCH", { qty })),
+  removeItem: (itemId) => req(`/cart/items/${itemId}`, json("DELETE")),
   placeOrder: (b) => req("/orders", json("POST", b)),
   myOrders: () => req("/orders/mine"),
   trackOrder: (orderNo, mobile) => req(`/orders/track?${qs({ orderNo, mobile })}`),
@@ -99,6 +102,8 @@ export const api = {
     order: (id) => req(`/admin/orders/${id}`),
     setStatus: (id, status) => req(`/admin/orders/${id}/status`, json("PATCH", { status })),
     setPayment: (id, paymentStatus) => req(`/admin/orders/${id}/payment`, json("PATCH", { paymentStatus })),
+    rentalReturned: (id) => req(`/admin/orders/${id}/rental-returned`, json("PATCH")),
+    rentals: (when) => req(`/admin/rentals?when=${when}`),
 
     customers: (f = {}) => req(`/admin/customers?${qs(f)}`),
     customer: (id) => req(`/admin/customers/${id}`),

@@ -3,7 +3,7 @@ import { icon } from "../icons.js";
 import { api, ApiError } from "../api.js";
 import { lkr } from "../format.js";
 import { state, subscribe, refreshCart, rememberOrder } from "../store.js";
-import { freeDeliveryBar, pageLoading, productImage } from "../ui.js";
+import { freeDeliveryBar, lineDetail, pageLoading, productImage } from "../ui.js";
 import { navigate } from "../router.js";
 
 export default function checkout(view, ctx) {
@@ -64,7 +64,7 @@ export default function checkout(view, ctx) {
   const drawParts = () => {
     const cart = state.cart, s = state.settings;
     const fee = delivery === "DELIVERY" ? cart.deliveryFee : 0;
-    const total = cart.subtotal + fee;
+    const total = cart.subtotal + fee + cart.deposit;
 
     setHtml($("[data-delivery-choices]", view), html`
       <label class="choice">
@@ -87,11 +87,12 @@ export default function checkout(view, ctx) {
       <h2>Your order</h2>
       <div class="summary-items">${cart.items.map((i) => html`<div class="summary-item">
         <span class="summary-item-img">${productImage(i.product.images[0]?.url, "", { type: i.product.jewelleryType })}<span class="summary-item-qty" aria-label="Quantity ${i.qty}">${i.qty}</span></span>
-        <span>${i.product.name}</span>
+        <span>${i.product.name}${lineDetail(i)}</span>
         <span class="num">${lkr(i.lineTotal)}</span>
       </div>`)}</div>
       <div class="summary-row"><span>Subtotal</span><span>${lkr(cart.subtotal)}</span></div>
       <div class="summary-row"><span>Delivery</span><span>${fee ? lkr(fee) : "Free"}</span></div>
+      ${cart.deposit > 0 && html`<div class="summary-row"><span>Refundable deposit</span><span>${lkr(cart.deposit)}</span></div>`}
       ${delivery === "DELIVERY" && freeDeliveryBar(cart.subtotal, cart.freeDeliveryOver)}
       <div class="summary-row summary-total"><span>Total</span><span>${lkr(total)}</span></div>
       <button class="btn btn-primary btn-lg btn-block"${attr("disabled", busy)}>${busy ? "Placing order…" : html`${icon("lock", 18)}Proceed to pay`}</button>

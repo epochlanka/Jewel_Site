@@ -17,7 +17,7 @@ function services(s) {
 }
 
 export default async function home(view, ctx) {
-  const d = { cats: [], fresh: [], sale: [], loading: true };
+  const d = { cats: [], fresh: [], sale: [], rent: [], loading: true };
 
   const draw = () => {
     const s = state.settings;
@@ -55,6 +55,18 @@ export default async function home(view, ctx) {
           : html`<p class="empty-note">New pieces are on their way. Check back soon.</p>`}
       </section>
 
+      ${d.rent.length > 0 && html`<section class="home-section" aria-labelledby="rent-title">
+        <div class="rent-band">
+          <div class="rent-band-copy">
+            <span class="rent-band-kicker">${icon("clock", 16)}Bridal rentals</span>
+            <h2 id="rent-title">Rent your bridal jewellery</h2>
+            <p>Wear a complete bridal set for your big day without buying it. Pick your dates, pay the rent and a refundable deposit, and return it after the wedding.</p>
+            <a href="/shop?rent=1" class="btn btn-primary">See rental pieces</a>
+          </div>
+          <div class="rail rail-products">${d.rent.map(productCard)}</div>
+        </div>
+      </section>`}
+
       ${d.sale.length > 0 && html`<section class="home-section" aria-labelledby="sale-title">
         <div class="section-head"><h2 id="sale-title">On offer now</h2><a href="/shop?onSale=1">See all offers</a></div>
         <div class="rail rail-products">${d.sale.map(productCard)}</div>
@@ -82,6 +94,7 @@ export default async function home(view, ctx) {
       d.fresh = r.items.length ? r.items : (await api.products({ limit: 8 })).items;
     }),
     api.products({ onSale: 1, limit: 12 }).then((r) => { d.sale = r.items; }),
+    api.products({ rent: 1, limit: 8 }).then((r) => { d.rent = r.items; }),
   ]).catch(() => undefined);
   d.loading = false;
   draw();

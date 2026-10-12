@@ -298,3 +298,69 @@ func (a *App) changePassword(w http.ResponseWriter, r *http.Request) error {
 	}
 	return noContent(w)
 }
+
+// PATCH /api/auth/account: change the sign-in email, name and/or password.
+// Body: { currentPassword, email?, name?, newPassword? }. The current password is always required.
+func (a *App) updateAccount(w http.ResponseWriter, r *http.Request) error {
+	au, err := a.requireUser(r)
+	if err != nil {
+		return err
+	}
+	b, err := readBody(r)
+	if err != nil {
+		return err
+	}
+	current, _, err := b.str("currentPassword")
+	if err != nil {
+		return err
+	}
+	var hash string
+	if err := a.db.QueryRowContext(r.Context(), `SELECT password FROM users WHERE id = ?`, au.ID).Scan(&hash); err != nil || !checkPassword(hash, current) {
+		return badField("currentPassword", "Your current password is wrong.")
+	}
+	var set []string
+	var args []any
+	if email, has, err := b.str("email"); err != nil {
+		return err
+	} else if has {
+		email = strings.ToLower(strings.TrimSpace(email))
+		if !validEmail(email) {
+			return badField("email", "Enter a valid email")
+		}
+		if n, _ := countRows(r.Context(), a.db, `SELECT COUNT(*) FROM users WHERE email = ? AND id <> ?`, email, au.ID); n > 0 {
+			return badField("email", "Another account already uses this email.")
+		}
+		set, args = append(set, "email = ?"), append(args, email)
+	}
+	if name, has, err := b.str("name"); err != nil {
+		return err
+	} else if has {
+		name = strings.TrimSpace(name)
+		if len([]rune(name)) < 2 {
+			return badField("name", "Enter your name")
+		}
+		set, args = append(set, "name = ?"), append(args, name)
+	}
+	if next, has, err := b.str("newPassword"); err != nil {
+		return err
+	} else if has && next != "" {
+		if len(next) < 8 {
+			return badField("newPassword", "Use at least 8 characters for the new password")
+		}
+		h, err := hashPassword(next)
+		if err != nil {
+			return err
+		}
+		set, args = append(set, "password = ?"), append(args, h)
+	}
+	if len(set) > 0 {
+		if _, err := a.db.ExecContext(r.Context(), `UPDATE users SET `+strings.Join(set, ", ")+` WHERE id = ?`, append(args, au.ID)...); err != nil {
+			return err
+		}
+	}
+	u, err := a.publicUser(r, au.ID)
+	if err != nil {
+		return err
+	}
+	return ok(w, u)
+}

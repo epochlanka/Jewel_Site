@@ -46,7 +46,7 @@ func (a *App) notifyOrderPlaced(o Order) {
 	}
 	var lines []string
 	for _, it := range o.Items {
-		lines = append(lines, fmt.Sprintf("%s × %d", it.Name, it.Qty))
+		lines = append(lines, fmt.Sprintf("%s × %d", it.label(), it.Qty))
 	}
 	list := strings.Join(lines, "\n")
 	send(o.Mobile, fmt.Sprintf("%s: order %s received.\n%s\nTotal %s.\nPlease transfer %s with %s as the reference and upload the slip. Your order is confirmed once we receive your payment.",
@@ -92,4 +92,10 @@ func (a *App) notifySlipReceived(o Order) {
 		shop = s.Phone
 	}
 	send(shop, fmt.Sprintf("Payment slip uploaded for %s (%s, %s). Check the payment and confirm the order.", o.OrderNo, o.FullName, lkr(o.Total)))
+}
+
+func (a *App) notifyRentalReturned(o Order) {
+	send(o.Mobile, fmt.Sprintf("%s: thank you for returning your rental from order %s. Your deposit of %s has been refunded.", a.shopName(), o.OrderNo, lkr(o.Deposit)))
+	a.orderEmail(o, fmt.Sprintf("Rental returned: deposit refunded for %s", o.OrderNo), "Your deposit has been refunded",
+		fmt.Sprintf("thank you for returning your rental. We've refunded your deposit of %s.", lkr(o.Deposit)))
 }

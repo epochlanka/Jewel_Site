@@ -28,11 +28,12 @@ export default async function shop(view, ctx) {
   if (sp.get("inStock")) chips.push({ label: "In stock", clear: { inStock: null } });
   if (sp.get("onSale")) chips.push({ label: "On offer", clear: { onSale: null } });
   if (sp.get("newArrivals")) chips.push({ label: "New arrivals", clear: { newArrivals: null } });
+  if (sp.get("rent")) chips.push({ label: "For rent", clear: { rent: null } });
 
   const draw = () => {
     const { data, cats, facets, err, open } = d;
     const current = cats.find((c) => c.slug === category);
-    const title = q ? `Results for “${q}”` : current?.name ?? (sp.get("newArrivals") ? "New arrivals" : sp.get("onSale") ? "Offers" : "All jewellery");
+    const title = q ? `Results for “${q}”` : current?.name ?? (sp.get("newArrivals") ? "New arrivals" : sp.get("onSale") ? "Offers" : sp.get("rent") ? "Jewellery for rent" : "All jewellery");
     const check = (key, label) => html`<label class="check"><input type="checkbox" data-toggle="${key}"${attr("checked", !!sp.get(key))}>${label}</label>`;
 
     setHtml(view, html`<div class="page">
@@ -77,6 +78,7 @@ export default async function shop(view, ctx) {
             ${check("inStock", "In stock only")}
             ${check("onSale", "On offer")}
             ${check("newArrivals", "New arrivals")}
+            ${check("rent", "Available to rent")}
           </div>
         </aside>
 

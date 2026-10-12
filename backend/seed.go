@@ -6,23 +6,42 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 )
 
-// seed adds the admin account, the standard categories and the settings row. It is safe to run again.
+// seed adds the first admin account, the standard categories and the settings row.
+// It is safe to run again. The admin's email and password come from ADMIN_EMAIL and
+// ADMIN_PASSWORD; without a password, a random one is made and printed once.
+// Change them later in the admin under My account.
 func (a *App) seed() error {
 	ctx := context.Background()
-	if n, err := countRows(ctx, a.db, `SELECT COUNT(*) FROM users WHERE email = 'admin@shop.lk'`); err != nil {
+	if n, err := countRows(ctx, a.db, `SELECT COUNT(*) FROM users WHERE role = 'ADMIN'`); err != nil {
 		return err
 	} else if n == 0 {
-		hash, err := hashPassword("admin123")
+		email := strings.ToLower(strings.TrimSpace(env("ADMIN_EMAIL", "admin@shop.lk")))
+		password, generated := os.Getenv("ADMIN_PASSWORD"), false
+		if password == "" {
+			password, generated = randomHex(6), true
+		}
+		if !validEmail(email) || len(password) < 8 {
+			return fmt.Errorf("ADMIN_EMAIL must be a valid email and ADMIN_PASSWORD at least 8 characters")
+		}
+		hash, err := hashPassword(password)
 		if err != nil {
 			return err
 		}
-		if _, err := a.db.ExecContext(ctx, `INSERT INTO users (id, name, email, password, role, created_at) VALUES (?, 'Admin', 'admin@shop.lk', ?, 'ADMIN', ?)`, newID(), hash, nowTS()); err != nil {
+		if _, err := a.db.ExecContext(ctx, `INSERT INTO users (id, name, email, password, role, created_at) VALUES (?, 'Admin', ?, ?, 'ADMIN', ?)`, newID(), email, hash, nowTS()); err != nil {
 			return err
 		}
+		if generated {
+			log.Printf("Admin account created: %s with password %s (shown only now; change it in the admin under My account)", email, password)
+		} else {
+			log.Printf("Admin account created: %s", email)
+		}
+	} else {
+		log.Println("An admin account already exists; it was left as it is.")
 	}
 	cats := []string{"Earrings", "Bangles", "Chains", "Long Chains", "Necklaces", "Rings", "Bracelets", "Anklets", "Bridal Jewellery", "Hair Accessories", "Fancy Jewellery"}
 	for i, name := range cats {
@@ -34,7 +53,7 @@ func (a *App) seed() error {
 	if _, err := getSettings(ctx, a.db); err != nil {
 		return err
 	}
-	log.Printf("Seeded: admin@shop.lk / admin123, %d categories, shop settings", len(cats))
+	log.Printf("Seeded: %d categories and shop settings", len(cats))
 	return nil
 }
 
@@ -128,6 +147,38 @@ func (a *App) seedDemo() error {
 				return err
 			}
 			added++
+		}
+		// Rentals: the bridal set is rent only, the tiara can be bought or rented.
+		for _, x := range []struct {
+			code                                 string
+			forSale                              bool
+			rent, days, extraDay, deposit, units int
+		}{
+			{"BJ01", false, 9500, 3, 1500, 20000, 1},
+			{"HA01", true, 3500, 3, 750, 8000, 1},
+		} {
+			if _, err := tx.ExecContext(ctx, `UPDATE products SET for_sale = ?, for_rent = 1, rent_price = ?, rent_days = ?, rent_extra_day = ?, rent_deposit = ?, rent_units = ? WHERE code = ?`,
+				boolInt(x.forSale), x.rent, x.days, x.extraDay, x.deposit, x.units, demoPrefix+x.code); err != nil {
+				return err
+			}
+		}
+		// Bangles come in sizes, each with its own stock.
+		for code, stock := range map[string][]int{"BG01": {1, 2, 2, 0}, "BG02": {2, 3, 2, 1}, "BG03": {0, 1, 2, 1}} {
+			var id string
+			if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code = ?`, demoPrefix+code).Scan(&id); err != nil {
+				continue
+			}
+			sizes, total := []Size{}, 0
+			for i, label := range []string{"2.2", "2.4", "2.6", "2.8"} {
+				sizes = append(sizes, Size{Size: label, Stock: stock[i]})
+				total += stock[i]
+			}
+			if err := saveSizes(ctx, tx, id, sizes); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE products SET stock = ? WHERE id = ?`, total, id); err != nil {
+				return err
+			}
 		}
 		for slug, photo := range demoCategoryPhotos {
 			if _, err := tx.ExecContext(ctx, `UPDATE categories SET image_url = ? WHERE slug = ? AND image_url IS NULL`, unsplash(photo, 300), slug); err != nil {

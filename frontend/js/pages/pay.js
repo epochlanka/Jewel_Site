@@ -5,7 +5,7 @@ import { icon } from "../icons.js";
 import { api, ApiError } from "../api.js";
 import { dateTime, lkr } from "../format.js";
 import { state, subscribe, rememberedMobile, rememberOrder, toast } from "../store.js";
-import { awaitingPayment, pageLoading, productImage, slipSent } from "../ui.js";
+import { awaitingPayment, lineDetail, pageLoading, productImage, slipSent } from "../ui.js";
 
 const MAX_MB = 8;
 const slipTypes = /^(image\/(jpeg|png|webp)|application\/pdf)$/;
@@ -107,11 +107,12 @@ export default async function pay(view, ctx) {
           <h2>Order summary</h2>
           <div class="summary-items">${order.items.map((i) => html`<div class="summary-item">
             <span class="summary-item-img">${productImage(i.product?.images[0]?.url, "")}<span class="summary-item-qty" aria-label="Quantity ${i.qty}">${i.qty}</span></span>
-            <span>${i.name}</span>
+            <span>${i.name}${lineDetail(i)}</span>
             <span class="num">${lkr(i.price * i.qty)}</span>
           </div>`)}</div>
           <div class="summary-row"><span>Subtotal (${count} ${count === 1 ? "item" : "items"})</span><span>${lkr(order.subtotal)}</span></div>
           <div class="summary-row"><span>${order.deliveryMethod === "PICKUP" ? "Store pickup" : "Delivery fee"}</span><span>${order.deliveryFee ? lkr(order.deliveryFee) : "Free"}</span></div>
+          ${order.deposit > 0 && html`<div class="summary-row"><span>Refundable deposit</span><span>${lkr(order.deposit)}</span></div>`}
           <div class="summary-row summary-total"><span>Total amount</span><span>${lkr(order.total)}</span></div>
           <p class="summary-note">${icon("lock", 14)} Your order is held for you while we wait for the payment.</p>
         </aside>

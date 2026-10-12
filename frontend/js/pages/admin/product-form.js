@@ -74,6 +74,36 @@ export default async function productForm(view, ctx) {
         </section>
 
         <section class="panel form">
+          <h2 style="font-size: 22px">Selling</h2>
+          ${switchField({ name: "forSale", label: "Customers can buy this piece", checked: p?.forSale ?? true })}
+          <div class="form-grid" data-sale-fields>
+            <label class="field"><span class="field-label">Price (LKR)</span><input name="price" type="number" min="1" step="1" inputmode="numeric" value="${p?.price || ""}"></label>
+            <label class="field"><span class="field-label">Stock</span><input name="stock" type="number" min="0" step="1" inputmode="numeric" value="${p?.stock ?? 1}" data-stock><span class="field-hint" data-stock-hint>Shows as sold out at 0</span></label>
+          </div>
+          <div class="field" data-sale-fields>
+            <span class="field-label">Sizes <span class="optional">(optional)</span></span>
+            <span class="field-hint">For bangles or rings. Each size has its own stock, and customers must choose one.</span>
+            <div class="size-editor" data-sizes></div>
+            <div class="size-editor-actions">
+              <button type="button" class="btn btn-quiet btn-sm" data-add-size>${icon("plus", 16)}Add a size</button>
+              <button type="button" class="btn btn-quiet btn-sm" data-bangle-sizes>Add bangle sizes 2.2 to 2.8</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel form">
+          <h2 style="font-size: 22px">Renting</h2>
+          ${switchField({ name: "forRent", label: "Customers can rent this piece", hint: "For example a bridal set. Customers pick their dates and the same set can't be booked twice for the same day.", checked: p?.forRent ?? false })}
+          <div class="form-grid" data-rent-fields>
+            <label class="field"><span class="field-label">Rent price (LKR)</span><input name="rentPrice" type="number" min="1" step="1" inputmode="numeric" value="${p?.rentPrice || ""}"></label>
+            <label class="field"><span class="field-label">Days included</span><input name="rentDays" type="number" min="1" max="30" step="1" inputmode="numeric" value="${p?.rentDays ?? 3}"><span class="field-hint">The rent price covers this many days</span></label>
+            <label class="field"><span class="field-label">Each extra day (LKR)</span><input name="rentExtraDay" type="number" min="0" step="1" inputmode="numeric" value="${p?.rentExtraDay ?? 0}"></label>
+            <label class="field"><span class="field-label">Refundable deposit (LKR)</span><input name="rentDeposit" type="number" min="0" step="1" inputmode="numeric" value="${p?.rentDeposit ?? 0}"></label>
+            <label class="field"><span class="field-label">Sets available</span><input name="rentUnits" type="number" min="1" step="1" inputmode="numeric" value="${p?.rentUnits ?? 1}"><span class="field-hint">How many identical sets you can rent out on the same day</span></label>
+          </div>
+        </section>
+
+        <section class="panel form">
           <h2 style="font-size: 22px">Photos</h2>
           <p class="field-hint" style="margin-top: -8px">The first photo is the main one in the shop. JPG, PNG or WebP, up to 8 MB each.</p>
           <div class="image-manager" data-images></div>
@@ -82,11 +112,6 @@ export default async function productForm(view, ctx) {
       </div>
 
       <div class="admin-form-side">
-        <section class="panel form">
-          <h2 style="font-size: 22px">Price and stock</h2>
-          <label class="field"><span class="field-label">Price (LKR)</span><input name="price" type="number" required min="1" step="1" inputmode="numeric" value="${p?.price ?? ""}"></label>
-          <label class="field"><span class="field-label">Stock</span><input name="stock" type="number" required min="0" step="1" inputmode="numeric" value="${p?.stock ?? 1}"><span class="field-hint">Shows as sold out at 0</span></label>
-        </section>
         <section class="panel form">
           <h2 style="font-size: 22px">Visibility</h2>
           ${switchField({ name: "isActive", label: "Show in the shop", checked: p?.isActive ?? true })}
@@ -102,24 +127,188 @@ export default async function productForm(view, ctx) {
   </form>`);
   drawImages();
 
+  // Sizes are edited in memory and sent as JSON when the form is saved.
+  let sizes = (p?.sizes ?? []).map((x) => ({ size: x.size, stock: x.stock }));
+  const syncStock = () => {
+    const stock = $("[data-stock]", view), hint = $("[data-stock-hint]", view);
+    const valid = sizes.filter((x) => x.size.trim());
+    stock.readOnly = valid.length > 0;
+    if (valid.length) stock.value = valid.reduce((n, x) => n + (Number(x.stock) || 0), 0);
+    hint.textContent = valid.length ? "Total of all sizes" : "Shows as sold out at 0";
+  };
+  const drawSizes = () => {
+    setHtml($("[data-sizes]", view), sizes.map((x, i) => html`<div class="size-row">
+      <input aria-label="Size" placeholder="2.4" maxlength="12" value="${x.size}" data-size-field="size" data-i="${i}">
+      <input aria-label="Stock for this size" type="number" min="0" step="1" inputmode="numeric" value="${x.stock}" data-size-field="stock" data-i="${i}">
+      <button type="button" class="icon-btn" aria-label="Remove size ${x.size}" data-remove-size="${i}">${icon("trash", 16)}</button>
+    </div>`));
+    syncStock();
+  };
+  const syncModes = () => {
+    const sale = $("[name=forSale]", view).checked, rent = $("[name=forRent]", view).checked;
+    for (const el of view.querySelectorAll("[data-sale-fields]")) {
+      el.hidden = !sale;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !sale; });
+    }
+    $("[name=price]", view).required = sale;
+    for (const el of view.querySelectorAll("[data-rent-fields]")) {
+      el.hidden = !rent;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !rent; });
+    }
+    $("[name=rentPrice]", view).required = rent;
+  };
+  drawSizes();
+  syncModes();
+  on(view, "change", "[name=forSale], [name=forRent]", syncModes);
+  on(view, "input", "[data-size-field]", (e, el) => { sizes[Number(el.dataset.i)][el.dataset.sizeField] = el.value; syncStock(); });
+  on(view, "click", "[data-add-size]", () => { sizes.push({ size: "", stock: 0 }); drawSizes(); view.querySelector(`[data-i="${sizes.length - 1}"]`)?.focus(); });
+  on(view, "click", "[data-bangle-sizes]", () => {
+    for (const label of ["2.2", "2.4", "2.6", "2.8"]) if (!sizes.some((x) => x.size === label)) sizes.push({ size: label, stock: 0 });
+    drawSizes();
+  });
+  on(view, "click", "[data-remove-size]", (e, el) => { sizes.splice(Number(el.dataset.removeSize), 1); drawSizes(); });
+
   on(view, "change", "[data-add-images]", (e, el) => {
     const list = [...el.files];
     const good = list.filter(okType);
     if (good.length < list.length) toast("Some files were skipped. Use JPG, PNG or WebP up to 8 MB.", { kind: "error" });
     files = [...files, ...good.map((file) => ({ file, url: URL.createObjectURL(file) }))].slice(0, 10);
     drawImages();
+
+  // Sizes are edited in memory and sent as JSON when the form is saved.
+  let sizes = (p?.sizes ?? []).map((x) => ({ size: x.size, stock: x.stock }));
+  const syncStock = () => {
+    const stock = $("[data-stock]", view), hint = $("[data-stock-hint]", view);
+    const valid = sizes.filter((x) => x.size.trim());
+    stock.readOnly = valid.length > 0;
+    if (valid.length) stock.value = valid.reduce((n, x) => n + (Number(x.stock) || 0), 0);
+    hint.textContent = valid.length ? "Total of all sizes" : "Shows as sold out at 0";
+  };
+  const drawSizes = () => {
+    setHtml($("[data-sizes]", view), sizes.map((x, i) => html`<div class="size-row">
+      <input aria-label="Size" placeholder="2.4" maxlength="12" value="${x.size}" data-size-field="size" data-i="${i}">
+      <input aria-label="Stock for this size" type="number" min="0" step="1" inputmode="numeric" value="${x.stock}" data-size-field="stock" data-i="${i}">
+      <button type="button" class="icon-btn" aria-label="Remove size ${x.size}" data-remove-size="${i}">${icon("trash", 16)}</button>
+    </div>`));
+    syncStock();
+  };
+  const syncModes = () => {
+    const sale = $("[name=forSale]", view).checked, rent = $("[name=forRent]", view).checked;
+    for (const el of view.querySelectorAll("[data-sale-fields]")) {
+      el.hidden = !sale;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !sale; });
+    }
+    $("[name=price]", view).required = sale;
+    for (const el of view.querySelectorAll("[data-rent-fields]")) {
+      el.hidden = !rent;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !rent; });
+    }
+    $("[name=rentPrice]", view).required = rent;
+  };
+  drawSizes();
+  syncModes();
+  on(view, "change", "[name=forSale], [name=forRent]", syncModes);
+  on(view, "input", "[data-size-field]", (e, el) => { sizes[Number(el.dataset.i)][el.dataset.sizeField] = el.value; syncStock(); });
+  on(view, "click", "[data-add-size]", () => { sizes.push({ size: "", stock: 0 }); drawSizes(); view.querySelector(`[data-i="${sizes.length - 1}"]`)?.focus(); });
+  on(view, "click", "[data-bangle-sizes]", () => {
+    for (const label of ["2.2", "2.4", "2.6", "2.8"]) if (!sizes.some((x) => x.size === label)) sizes.push({ size: label, stock: 0 });
+    drawSizes();
+  });
+  on(view, "click", "[data-remove-size]", (e, el) => { sizes.splice(Number(el.dataset.removeSize), 1); drawSizes(); });
   });
   on(view, "click", "[data-remove-new]", (e, el) => {
     const i = Number(el.dataset.removeNew);
     URL.revokeObjectURL(files[i].url);
     files = files.filter((_, j) => j !== i);
     drawImages();
+
+  // Sizes are edited in memory and sent as JSON when the form is saved.
+  let sizes = (p?.sizes ?? []).map((x) => ({ size: x.size, stock: x.stock }));
+  const syncStock = () => {
+    const stock = $("[data-stock]", view), hint = $("[data-stock-hint]", view);
+    const valid = sizes.filter((x) => x.size.trim());
+    stock.readOnly = valid.length > 0;
+    if (valid.length) stock.value = valid.reduce((n, x) => n + (Number(x.stock) || 0), 0);
+    hint.textContent = valid.length ? "Total of all sizes" : "Shows as sold out at 0";
+  };
+  const drawSizes = () => {
+    setHtml($("[data-sizes]", view), sizes.map((x, i) => html`<div class="size-row">
+      <input aria-label="Size" placeholder="2.4" maxlength="12" value="${x.size}" data-size-field="size" data-i="${i}">
+      <input aria-label="Stock for this size" type="number" min="0" step="1" inputmode="numeric" value="${x.stock}" data-size-field="stock" data-i="${i}">
+      <button type="button" class="icon-btn" aria-label="Remove size ${x.size}" data-remove-size="${i}">${icon("trash", 16)}</button>
+    </div>`));
+    syncStock();
+  };
+  const syncModes = () => {
+    const sale = $("[name=forSale]", view).checked, rent = $("[name=forRent]", view).checked;
+    for (const el of view.querySelectorAll("[data-sale-fields]")) {
+      el.hidden = !sale;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !sale; });
+    }
+    $("[name=price]", view).required = sale;
+    for (const el of view.querySelectorAll("[data-rent-fields]")) {
+      el.hidden = !rent;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !rent; });
+    }
+    $("[name=rentPrice]", view).required = rent;
+  };
+  drawSizes();
+  syncModes();
+  on(view, "change", "[name=forSale], [name=forRent]", syncModes);
+  on(view, "input", "[data-size-field]", (e, el) => { sizes[Number(el.dataset.i)][el.dataset.sizeField] = el.value; syncStock(); });
+  on(view, "click", "[data-add-size]", () => { sizes.push({ size: "", stock: 0 }); drawSizes(); view.querySelector(`[data-i="${sizes.length - 1}"]`)?.focus(); });
+  on(view, "click", "[data-bangle-sizes]", () => {
+    for (const label of ["2.2", "2.4", "2.6", "2.8"]) if (!sizes.some((x) => x.size === label)) sizes.push({ size: label, stock: 0 });
+    drawSizes();
+  });
+  on(view, "click", "[data-remove-size]", (e, el) => { sizes.splice(Number(el.dataset.removeSize), 1); drawSizes(); });
   });
   on(view, "click", "[data-delete-image]", async (e, el) => {
     try {
       await api.admin.deleteImage(p.id, el.dataset.deleteImage);
       images = images.filter((x) => x.id !== el.dataset.deleteImage);
       drawImages();
+
+  // Sizes are edited in memory and sent as JSON when the form is saved.
+  let sizes = (p?.sizes ?? []).map((x) => ({ size: x.size, stock: x.stock }));
+  const syncStock = () => {
+    const stock = $("[data-stock]", view), hint = $("[data-stock-hint]", view);
+    const valid = sizes.filter((x) => x.size.trim());
+    stock.readOnly = valid.length > 0;
+    if (valid.length) stock.value = valid.reduce((n, x) => n + (Number(x.stock) || 0), 0);
+    hint.textContent = valid.length ? "Total of all sizes" : "Shows as sold out at 0";
+  };
+  const drawSizes = () => {
+    setHtml($("[data-sizes]", view), sizes.map((x, i) => html`<div class="size-row">
+      <input aria-label="Size" placeholder="2.4" maxlength="12" value="${x.size}" data-size-field="size" data-i="${i}">
+      <input aria-label="Stock for this size" type="number" min="0" step="1" inputmode="numeric" value="${x.stock}" data-size-field="stock" data-i="${i}">
+      <button type="button" class="icon-btn" aria-label="Remove size ${x.size}" data-remove-size="${i}">${icon("trash", 16)}</button>
+    </div>`));
+    syncStock();
+  };
+  const syncModes = () => {
+    const sale = $("[name=forSale]", view).checked, rent = $("[name=forRent]", view).checked;
+    for (const el of view.querySelectorAll("[data-sale-fields]")) {
+      el.hidden = !sale;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !sale; });
+    }
+    $("[name=price]", view).required = sale;
+    for (const el of view.querySelectorAll("[data-rent-fields]")) {
+      el.hidden = !rent;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !rent; });
+    }
+    $("[name=rentPrice]", view).required = rent;
+  };
+  drawSizes();
+  syncModes();
+  on(view, "change", "[name=forSale], [name=forRent]", syncModes);
+  on(view, "input", "[data-size-field]", (e, el) => { sizes[Number(el.dataset.i)][el.dataset.sizeField] = el.value; syncStock(); });
+  on(view, "click", "[data-add-size]", () => { sizes.push({ size: "", stock: 0 }); drawSizes(); view.querySelector(`[data-i="${sizes.length - 1}"]`)?.focus(); });
+  on(view, "click", "[data-bangle-sizes]", () => {
+    for (const label of ["2.2", "2.4", "2.6", "2.8"]) if (!sizes.some((x) => x.size === label)) sizes.push({ size: label, stock: 0 });
+    drawSizes();
+  });
+  on(view, "click", "[data-remove-size]", (e, el) => { sizes.splice(Number(el.dataset.removeSize), 1); drawSizes(); });
       toast("Photo removed");
     } catch (err) { toastError(err); }
   });
@@ -130,6 +319,47 @@ export default async function productForm(view, ctx) {
       await api.admin.orderImages(p.id, order);
       images = [img, ...images.filter((x) => x.id !== img.id)];
       drawImages();
+
+  // Sizes are edited in memory and sent as JSON when the form is saved.
+  let sizes = (p?.sizes ?? []).map((x) => ({ size: x.size, stock: x.stock }));
+  const syncStock = () => {
+    const stock = $("[data-stock]", view), hint = $("[data-stock-hint]", view);
+    const valid = sizes.filter((x) => x.size.trim());
+    stock.readOnly = valid.length > 0;
+    if (valid.length) stock.value = valid.reduce((n, x) => n + (Number(x.stock) || 0), 0);
+    hint.textContent = valid.length ? "Total of all sizes" : "Shows as sold out at 0";
+  };
+  const drawSizes = () => {
+    setHtml($("[data-sizes]", view), sizes.map((x, i) => html`<div class="size-row">
+      <input aria-label="Size" placeholder="2.4" maxlength="12" value="${x.size}" data-size-field="size" data-i="${i}">
+      <input aria-label="Stock for this size" type="number" min="0" step="1" inputmode="numeric" value="${x.stock}" data-size-field="stock" data-i="${i}">
+      <button type="button" class="icon-btn" aria-label="Remove size ${x.size}" data-remove-size="${i}">${icon("trash", 16)}</button>
+    </div>`));
+    syncStock();
+  };
+  const syncModes = () => {
+    const sale = $("[name=forSale]", view).checked, rent = $("[name=forRent]", view).checked;
+    for (const el of view.querySelectorAll("[data-sale-fields]")) {
+      el.hidden = !sale;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !sale; });
+    }
+    $("[name=price]", view).required = sale;
+    for (const el of view.querySelectorAll("[data-rent-fields]")) {
+      el.hidden = !rent;
+      el.querySelectorAll("input").forEach((i) => { i.disabled = !rent; });
+    }
+    $("[name=rentPrice]", view).required = rent;
+  };
+  drawSizes();
+  syncModes();
+  on(view, "change", "[name=forSale], [name=forRent]", syncModes);
+  on(view, "input", "[data-size-field]", (e, el) => { sizes[Number(el.dataset.i)][el.dataset.sizeField] = el.value; syncStock(); });
+  on(view, "click", "[data-add-size]", () => { sizes.push({ size: "", stock: 0 }); drawSizes(); view.querySelector(`[data-i="${sizes.length - 1}"]`)?.focus(); });
+  on(view, "click", "[data-bangle-sizes]", () => {
+    for (const label of ["2.2", "2.4", "2.6", "2.8"]) if (!sizes.some((x) => x.size === label)) sizes.push({ size: label, stock: 0 });
+    drawSizes();
+  });
+  on(view, "click", "[data-remove-size]", (e, el) => { sizes.splice(Number(el.dataset.removeSize), 1); drawSizes(); });
       toast("Main photo updated");
     } catch (err) { toastError(err); }
   });
@@ -137,7 +367,8 @@ export default async function productForm(view, ctx) {
     e.preventDefault();
     if (busy) return;
     const fd = new FormData(form);
-    for (const k of ["isActive", "isNewArrival"]) fd.set(k, fd.get(k) ? "true" : "false");
+    for (const k of ["isActive", "isNewArrival", "forSale", "forRent"]) fd.set(k, fd.get(k) ? "true" : "false");
+    if (fd.get("forSale") === "true") fd.set("sizes", JSON.stringify(sizes.filter((x) => x.size.trim()).map((x) => ({ size: x.size.trim(), stock: Number(x.stock) || 0 }))));
     // File pickers are only used to collect files; the chosen files are added below.
     for (const k of [...fd.keys()]) if (fd.get(k) instanceof File) fd.delete(k);
     files.forEach((f) => fd.append("images", f.file));

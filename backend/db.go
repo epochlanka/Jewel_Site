@@ -61,6 +61,17 @@ CREATE TABLE IF NOT EXISTS products (
 );
 CREATE INDEX IF NOT EXISTS products_category ON products(category_id);
 
+-- Sizes (for example bangle sizes 2.2, 2.4, 2.6) with their own stock.
+-- When a product has sizes, products.stock is the total of its sizes.
+CREATE TABLE IF NOT EXISTS product_sizes (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  size TEXT NOT NULL,
+  stock INTEGER NOT NULL DEFAULT 0,
+  sort INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (product_id, size)
+);
+
 CREATE TABLE IF NOT EXISTS product_images (
   id TEXT PRIMARY KEY,
   url TEXT NOT NULL,
@@ -81,7 +92,11 @@ CREATE TABLE IF NOT EXISTS cart_items (
   cart_id TEXT NOT NULL REFERENCES carts(id) ON DELETE CASCADE,
   product_id TEXT NOT NULL REFERENCES products(id),
   qty INTEGER NOT NULL DEFAULT 1,
-  UNIQUE (cart_id, product_id)
+  size TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'BUY', -- BUY or RENT
+  rent_from TEXT NOT NULL DEFAULT '',
+  rent_to TEXT NOT NULL DEFAULT '',
+  UNIQUE (cart_id, product_id, size, kind, rent_from)
 );
 
 CREATE TABLE IF NOT EXISTS wishlist_items (
@@ -209,11 +224,40 @@ func migrate(db *sql.DB) error {
 	}
 	add := map[string][]string{
 		"shop_settings": {"bank_name TEXT NOT NULL DEFAULT ''", "bank_branch TEXT NOT NULL DEFAULT ''", "account_name TEXT NOT NULL DEFAULT ''", "account_number TEXT NOT NULL DEFAULT ''"},
-		"orders":        {"payment_slip_url TEXT", "payment_ref TEXT", "payment_slip_at TEXT"},
+		"orders":        {"payment_slip_url TEXT", "payment_ref TEXT", "payment_slip_at TEXT", "deposit INTEGER NOT NULL DEFAULT 0", "deposit_refunded_at TEXT"},
+		// Pieces can be sold, rented (a fixed price for up to rent_days, then rent_extra_day per day) or both.
+		"products": {"for_sale INTEGER NOT NULL DEFAULT 1", "for_rent INTEGER NOT NULL DEFAULT 0", "rent_price INTEGER NOT NULL DEFAULT 0",
+			"rent_days INTEGER NOT NULL DEFAULT 3", "rent_extra_day INTEGER NOT NULL DEFAULT 0", "rent_deposit INTEGER NOT NULL DEFAULT 0", "rent_units INTEGER NOT NULL DEFAULT 1"},
+		"order_items": {"size TEXT NOT NULL DEFAULT ''", "kind TEXT NOT NULL DEFAULT 'BUY'", "rent_from TEXT", "rent_to TEXT", "deposit INTEGER NOT NULL DEFAULT 0"},
 	}
 	hasColumn := func(table, col string) (bool, error) {
 		n, err := countRows(context.Background(), db, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, col)
 		return n > 0, err
+	}
+	// Cart lines gained size, rental dates and a wider unique key; SQLite can't change
+	// a table's constraints in place, so the table is rebuilt.
+	if has, err := hasColumn("cart_items", "kind"); err != nil {
+		return err
+	} else if !has {
+		for _, q := range []string{
+			`CREATE TABLE cart_items_new (
+			  id TEXT PRIMARY KEY,
+			  cart_id TEXT NOT NULL REFERENCES carts(id) ON DELETE CASCADE,
+			  product_id TEXT NOT NULL REFERENCES products(id),
+			  qty INTEGER NOT NULL DEFAULT 1,
+			  size TEXT NOT NULL DEFAULT '',
+			  kind TEXT NOT NULL DEFAULT 'BUY',
+			  rent_from TEXT NOT NULL DEFAULT '',
+			  rent_to TEXT NOT NULL DEFAULT '',
+			  UNIQUE (cart_id, product_id, size, kind, rent_from))`,
+			`INSERT INTO cart_items_new (id, cart_id, product_id, qty) SELECT id, cart_id, product_id, qty FROM cart_items`,
+			`DROP TABLE cart_items`,
+			`ALTER TABLE cart_items_new RENAME TO cart_items`,
+		} {
+			if _, err := db.Exec(q); err != nil {
+				return err
+			}
+		}
 	}
 	for table, cols := range drop {
 		for _, col := range cols {

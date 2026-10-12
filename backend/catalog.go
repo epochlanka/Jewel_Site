@@ -48,21 +48,40 @@ type Product struct {
 	JewelleryType string    `json:"jewelleryType"`
 	CategoryID    string    `json:"categoryId"`
 	CreatedAt     string    `json:"createdAt"`
+	ForSale       bool      `json:"forSale"`
+	ForRent       bool      `json:"forRent"`
+	RentPrice     int       `json:"rentPrice"`    // for up to RentDays days
+	RentDays      int       `json:"rentDays"`     // days included in RentPrice
+	RentExtraDay  int       `json:"rentExtraDay"` // per day after that
+	RentDeposit   int       `json:"rentDeposit"`  // refundable
+	RentUnits     int       `json:"rentUnits"`    // identical sets that can be out at once
+	Sizes         []Size    `json:"sizes"`
 	Images        []Image   `json:"images"`
 	Category      *Category `json:"category,omitempty"`
 	Pricing
 }
 
 const productCols = `p.id, p.code, p.name, p.slug, p.description, p.price, p.stock, p.is_active, p.is_new_arrival,
-  p.style, p.colour, p.jewellery_type, p.category_id, p.created_at`
+  p.style, p.colour, p.jewellery_type, p.category_id, p.created_at,
+  p.for_sale, p.for_rent, p.rent_price, p.rent_days, p.rent_extra_day, p.rent_deposit, p.rent_units`
+
+// effPrice is what a piece costs to get: its sale price, or the rent for rent-only pieces.
+const effPrice = `(CASE WHEN p.for_sale = 1 THEN p.price ELSE p.rent_price END)`
+
+type Size struct {
+	ID    string `json:"id"`
+	Size  string `json:"size"`
+	Stock int    `json:"stock"`
+}
 
 func scanProduct(sc interface{ Scan(...any) error }) (Product, error) {
 	var p Product
 	var desc, style, colour sql.NullString
 	err := sc.Scan(&p.ID, &p.Code, &p.Name, &p.Slug, &desc, &p.Price, &p.Stock, &p.IsActive, &p.IsNewArrival,
-		&style, &colour, &p.JewelleryType, &p.CategoryID, &p.CreatedAt)
+		&style, &colour, &p.JewelleryType, &p.CategoryID, &p.CreatedAt,
+		&p.ForSale, &p.ForRent, &p.RentPrice, &p.RentDays, &p.RentExtraDay, &p.RentDeposit, &p.RentUnits)
 	p.Description, p.Style, p.Colour = strPtr(desc), strPtr(style), strPtr(colour)
-	p.Images = []Image{}
+	p.Images, p.Sizes = []Image{}, []Size{}
 	return p, err
 }
 
@@ -76,11 +95,46 @@ func queryProducts(ctx context.Context, q querier, query string, args ...any) ([
 	for rows.Next() {
 		p, err := scanProduct(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, attachSizes(ctx, q, out)
+}
+
+func attachSizes(ctx context.Context, q querier, list []Product) error {
+	if len(list) == 0 {
+		return nil
+	}
+	ids := make([]string, len(list))
+	for i, p := range list {
+		ids[i] = p.ID
+	}
+	rows, err := q.QueryContext(ctx, `SELECT id, size, stock, product_id FROM product_sizes WHERE product_id IN (`+placeholders(len(ids))+`) ORDER BY sort, id`, toAny(ids)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byProduct := map[string][]Size{}
+	for rows.Next() {
+		var sz Size
+		var pid string
+		if err := rows.Scan(&sz.ID, &sz.Size, &sz.Stock, &pid); err != nil {
+			return err
+		}
+		byProduct[pid] = append(byProduct[pid], sz)
+	}
+	for i := range list {
+		if sz := byProduct[list[i].ID]; sz != nil {
+			list[i].Sizes = sz
+		}
+	}
+	return rows.Err()
 }
 
 // attachImages fills in each product's photos, main photo first. firstOnly keeps just the main one.
@@ -224,7 +278,9 @@ func withPricing(ctx context.Context, q querier, list []Product) error {
 		return err
 	}
 	for i := range list {
-		list[i].Pricing = priceFor(list[i].ID, list[i].CategoryID, list[i].Price, offers)
+		if list[i].ForSale { // offers only discount pieces that are sold, not rentals
+			list[i].Pricing = priceFor(list[i].ID, list[i].CategoryID, list[i].Price, offers)
+		}
 	}
 	return nil
 }

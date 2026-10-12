@@ -2,7 +2,7 @@ import { html, attr, setHtml, on } from "../html.js";
 import { icon } from "../icons.js";
 import { lkr } from "../format.js";
 import { state, subscribe, setCartQty, removeFromCart } from "../store.js";
-import { emptyState, freeDeliveryBar, pageLoading, price, productImage, qtyStepper } from "../ui.js";
+import { emptyState, freeDeliveryBar, lineDetail, pageLoading, price, productImage, qtyStepper } from "../ui.js";
 
 export default function cartPage(view, ctx) {
   const draw = () => {
@@ -25,11 +25,15 @@ export default function cartPage(view, ctx) {
             <a href="/product/${i.product.slug}" class="cart-line-img" tabindex="-1" aria-hidden="true">${productImage(i.product.images[0]?.url, "", { type: i.product.jewelleryType })}</a>
             <div class="cart-line-info">
               <a href="/product/${i.product.slug}" class="cart-line-name">${i.product.name}</a>
-              ${price(i.product.price, i.product)}
-              ${!i.inStock && html`<span class="cart-line-warn">${i.product.stock ? `Only ${i.product.stock} left. Lower the quantity to continue.` : "Sold out. Remove it to continue."}</span>`}
+              ${i.kind === "RENT"
+                ? html`<span class="price price-md"><span class="price-now">${lkr(i.unitPrice)}</span><span class="price-unit">rent for ${i.rentDays} ${i.rentDays === 1 ? "day" : "days"}</span></span>`
+                : price(i.product.price, i.product)}
+              ${lineDetail(i)}
+              ${i.deposit > 0 && html`<span class="muted" style="font-size: 13px">+ ${lkr(i.deposit)} refundable deposit</span>`}
+              ${!i.inStock && html`<span class="cart-line-warn">${i.problem}</span>`}
               <div class="cart-line-controls">
-                ${qtyStepper(i.qty, Math.max(1, Math.min(i.product.stock, 20)), { label: `Quantity of ${i.product.name}`, key: `${i.productId}:${i.qty}` })}
-                <button class="btn-link" data-remove="${i.productId}" style="font-size: 14px">Remove</button>
+                ${i.kind !== "RENT" && qtyStepper(i.qty, i.maxQty, { label: `Quantity of ${i.product.name}`, key: `${i.id}:${i.qty}` })}
+                <button class="btn-link" data-remove="${i.id}" style="font-size: 14px">Remove</button>
               </div>
             </div>
             <span class="cart-line-total">${lkr(i.lineTotal)}</span>
@@ -40,6 +44,7 @@ export default function cartPage(view, ctx) {
           <h2>Summary</h2>
           <div class="summary-row"><span>Subtotal</span><span>${lkr(cart.subtotal)}</span></div>
           <div class="summary-row"><span>Delivery</span><span>${cart.deliveryFee ? lkr(cart.deliveryFee) : "Free"}</span></div>
+          ${cart.deposit > 0 && html`<div class="summary-row"><span>Refundable deposit</span><span>${lkr(cart.deposit)}</span></div>`}
           ${freeDeliveryBar(cart.subtotal, cart.freeDeliveryOver)}
           <div class="summary-row summary-total"><span>Total</span><span>${lkr(cart.total)}</span></div>
           <p class="summary-note">Store pickup is free. You'll choose at checkout.</p>

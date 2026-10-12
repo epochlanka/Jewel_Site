@@ -122,9 +122,25 @@ export function togglePassword(btn) {
 
 /* ---------- Product card ---------- */
 // Add-to-cart and heart buttons are handled once in app.js.
+// "12 Nov 2026" from "2026-11-12".
+export const dayLabel = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+
+// What an order or cart line is: the size, or the rental dates.
+export function lineDetail(l) {
+  if (l.kind === "RENT" && l.rentFrom) return html`<span class="line-tag line-tag-rent">${icon("clock", 13)}Rent ${dayLabel(l.rentFrom)} to ${dayLabel(l.rentTo)}</span>`;
+  if (l.size) return html`<span class="line-tag">Size ${l.size}</span>`;
+  return "";
+}
+
+export function rentPrice(p) {
+  return html`<span class="price price-md"><span class="price-now">${lkr(p.rentPrice)}</span><span class="price-unit">rent · up to ${p.rentDays} ${p.rentDays === 1 ? "day" : "days"}</span></span>`;
+}
+
 export function productCard(p) {
   const saved = state.wishIds.has(p.id);
-  const soldOut = p.stock <= 0;
+  const rentOnly = p.forRent && !p.forSale;
+  const soldOut = !rentOnly && p.stock <= 0;
+  const sized = p.sizes?.length > 0;
   return html`<article class="pcard ${soldOut ? "is-soldout" : ""}">
     <div class="pcard-media">
       <a href="/product/${p.slug}" class="pcard-link" tabindex="-1" aria-hidden="true">${productImage(p.images[0]?.url, p.name, { type: p.jewelleryType })}</a>
@@ -132,12 +148,15 @@ export function productCard(p) {
         aria-label="${saved ? `Remove ${p.name} from wishlist` : `Save ${p.name} to wishlist`}">${icon("heart", 20, saved)}</button>
     </div>
     <div class="pcard-body">
-      <div class="pcard-meta"><span>${p.code}</span>${p.isNewArrival && !soldOut && html`<span class="pcard-new">New</span>`}</div>
+      <div class="pcard-meta"><span>${p.code}</span>${p.forRent && html`<span class="pcard-rent">${rentOnly ? "For rent" : "Also for rent"}</span>`}${p.isNewArrival && !soldOut && !p.forRent && html`<span class="pcard-new">New</span>`}</div>
       <h3 class="pcard-name"><a href="/product/${p.slug}">${p.name}</a></h3>
-      ${price(p.price, p)}
+      ${rentOnly ? rentPrice(p) : price(p.price, p)}
+      ${sized && !rentOnly && html`<span class="pcard-sizes">Sizes ${p.sizes.map((s) => s.size).join(", ")}</span>`}
     </div>
     <div class="pcard-actions">
-      <button class="btn btn-primary btn-sm pcard-add" data-add-to-cart="${p.id}" data-name="${p.name}"${attr("disabled", soldOut)}>${soldOut ? "Sold out" : "Add to cart"}</button>
+      ${rentOnly ? html`<a href="/product/${p.slug}" class="btn btn-primary btn-sm pcard-add">${icon("clock", 16)}Book rental</a>`
+        : sized && !soldOut ? html`<a href="/product/${p.slug}" class="btn btn-primary btn-sm pcard-add">Choose size</a>`
+        : html`<button class="btn btn-primary btn-sm pcard-add" data-add-to-cart="${p.id}" data-name="${p.name}"${attr("disabled", soldOut)}>${soldOut ? "Sold out" : "Add to cart"}</button>`}
     </div>
   </article>`;
 }
@@ -291,12 +310,13 @@ export function orderTimeline(order) {
 export function orderLines(order) {
   return html`<div class="order-lines">${order.items.map((i) => html`<div class="order-line">
       <span class="order-line-img">${productImage(i.product?.images[0]?.url, "")}</span>
-      <span>${i.product?.slug ? html`<a href="/product/${i.product.slug}">${i.name}</a>` : i.name} <span class="muted">× ${i.qty}</span></span>
+      <span>${i.product?.slug ? html`<a href="/product/${i.product.slug}">${i.name}</a>` : i.name} <span class="muted">× ${i.qty}</span>${lineDetail(i)}</span>
       <span class="num">${lkr(i.price * i.qty)}</span>
     </div>`)}</div>
     <div class="order-totals">
       <div class="summary-row"><span>Subtotal</span><span>${lkr(order.subtotal)}</span></div>
       <div class="summary-row"><span>${deliveryLabel[order.deliveryMethod]}</span><span>${order.deliveryFee ? lkr(order.deliveryFee) : "Free"}</span></div>
+      ${order.deposit > 0 && html`<div class="summary-row"><span>Refundable deposit${order.depositRefundedAt ? " (refunded)" : ""}</span><span>${lkr(order.deposit)}</span></div>`}
       <div class="summary-row summary-total"><span>Total</span><span>${lkr(order.total)}</span></div>
       <div class="summary-row muted"><span>Payment</span><span>${paymentLabel[order.paymentMethod]}, ${paymentStatusLabel[order.paymentStatus].toLowerCase()}</span></div>
     </div>`;

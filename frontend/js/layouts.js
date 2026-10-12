@@ -12,6 +12,7 @@ const links = [
   { to: "/shop", label: "Shop" },
   { to: "/shop?newArrivals=1", label: "New arrivals" },
   { to: "/shop?onSale=1", label: "Offers" },
+  { to: "/shop?rent=1", label: "Bridal rentals" },
   { to: "/about", label: "About" },
   { to: "/contact", label: "Contact" },
 ];
@@ -20,7 +21,7 @@ function isActive(to) {
   const { pathname, search } = location;
   const [path, query] = to.split("?");
   if (query) return pathname === path && search.includes(query);
-  if (path === "/shop") return pathname.startsWith("/shop") && !/newArrivals|onSale/.test(search);
+  if (path === "/shop") return pathname.startsWith("/shop") && !/newArrivals|onSale|rent=/.test(search);
   if (path === "/") return pathname === "/";
   return pathname === path || pathname.startsWith(path + "/");
 }
@@ -114,6 +115,7 @@ export function siteLayout(root) {
           <a href="/shop">All jewellery</a>
           <a href="/shop?newArrivals=1">New arrivals</a>
           <a href="/shop?onSale=1">Offers</a>
+          <a href="/shop?rent=1">Bridal rentals</a>
           <a href="/account/wishlist">Wishlist</a>
         </div>
         <div class="footer-col">
@@ -196,9 +198,11 @@ const adminLinks = [
   { to: "/admin/products", label: "Products", icon: "products" },
   { to: "/admin/categories", label: "Categories", icon: "categories" },
   { to: "/admin/customers", label: "Customers", icon: "customers" },
+  { to: "/admin/rentals", label: "Rentals", icon: "clock" },
   { to: "/admin/offers", label: "Offers", icon: "offers" },
   { to: "/admin/reports", label: "Reports", icon: "reports" },
   { to: "/admin/settings", label: "Settings", icon: "settings" },
+  { to: "/admin/account", label: "My account", icon: "user" },
 ];
 
 export function adminLayout(root) {
@@ -208,7 +212,7 @@ export function adminLayout(root) {
       <header class="admin-top">
         <button class="icon-btn admin-menu" aria-label="Open menu" aria-expanded="false" data-admin-menu>${icon("menu")}</button>
         <a href="/admin" class="admin-top-brand" data-admin-brand></a>
-        <span class="admin-user"></span>
+        <a href="/admin/account" class="admin-user" title="My account"></a>
       </header>
       <div class="admin-content"></div>
     </div>

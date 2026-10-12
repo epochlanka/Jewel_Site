@@ -205,9 +205,10 @@ var orderMail = template.Must(template.New("order").Funcs(mailFuncs).Parse(`<!do
 
     <h2 style="font-size:17px;margin:0 0 10px">Order summary</h2>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;margin-bottom:8px">
-      {{range .Order.Items}}<tr><td style="padding:6px 0;border-bottom:1px solid #eef0ef">{{.Name}} × {{.Qty}}</td><td align="right" style="padding:6px 0;border-bottom:1px solid #eef0ef">{{lkr (mul .Price .Qty)}}</td></tr>{{end}}
+      {{range .Order.Items}}<tr><td style="padding:6px 0;border-bottom:1px solid #eef0ef">{{.Label}} × {{.Qty}}</td><td align="right" style="padding:6px 0;border-bottom:1px solid #eef0ef">{{lkr (mul .Price .Qty)}}</td></tr>{{end}}
       <tr><td style="padding:6px 0;color:#6b7370">Subtotal</td><td align="right" style="padding:6px 0">{{lkr .Order.Subtotal}}</td></tr>
       <tr><td style="padding:6px 0;color:#6b7370">{{if eq .Order.DeliveryMethod "PICKUP"}}Store pickup{{else}}Delivery{{end}}</td><td align="right" style="padding:6px 0">{{if .Order.DeliveryFee}}{{lkr .Order.DeliveryFee}}{{else}}Free{{end}}</td></tr>
+      {{if .Order.Deposit}}<tr><td style="padding:6px 0;color:#6b7370">Refundable deposit</td><td align="right" style="padding:6px 0">{{lkr .Order.Deposit}}</td></tr>{{end}}
       <tr><td style="padding:10px 0;font-weight:bold;font-size:16px;border-top:1px solid #e3e6e4">Total</td><td align="right" style="padding:10px 0;font-weight:bold;font-size:16px;border-top:1px solid #e3e6e4">{{lkr .Order.Total}}</td></tr>
     </table>
     <p style="margin:12px 0 0;font-size:14px;line-height:1.5;color:#4a524f">
@@ -246,7 +247,7 @@ func (a *App) orderEmail(o Order, subject, heading, intro string) {
 	}
 	text.WriteString("\nOrder summary\n")
 	for _, it := range o.Items {
-		fmt.Fprintf(&text, "%s × %d  %s\n", it.Name, it.Qty, lkr(it.Price*it.Qty))
+		fmt.Fprintf(&text, "%s × %d  %s\n", it.label(), it.Qty, lkr(it.Price*it.Qty))
 	}
 	fmt.Fprintf(&text, "Total %s\n", lkr(o.Total))
 	a.sendMail(*o.Email, subject, text.String(), body.String())

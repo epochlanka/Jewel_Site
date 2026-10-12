@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -38,9 +41,9 @@ func (a *App) listProducts(w http.ResponseWriter, r *http.Request) error {
 				return badField(k, "")
 			}
 			if k == "minPrice" {
-				add("p.price >= ?", n)
+				add(effPrice+" >= ?", n)
 			} else {
-				add("p.price <= ?", n)
+				add(effPrice+" <= ?", n)
 			}
 		}
 	}
@@ -52,6 +55,9 @@ func (a *App) listProducts(w http.ResponseWriter, r *http.Request) error {
 	}
 	if qs.Get("inStock") != "" {
 		add("p.stock > 0")
+	}
+	if qs.Get("rent") != "" {
+		add("p.for_rent = 1")
 	}
 	if qs.Get("newArrivals") != "" {
 		add("p.is_new_arrival = 1")
@@ -71,7 +77,7 @@ func (a *App) listProducts(w http.ResponseWriter, r *http.Request) error {
 		}
 		add("p.id IN ("+placeholders(len(ids))+")", toAny(ids)...)
 	}
-	order := map[string]string{"new": "p.created_at DESC", "price_asc": "p.price ASC", "price_desc": "p.price DESC", "name": "p.name ASC"}
+	order := map[string]string{"new": "p.created_at DESC", "price_asc": effPrice + " ASC", "price_desc": effPrice + " DESC", "name": "p.name ASC"}
 	sort := qs.Get("sort")
 	if sort == "" {
 		sort = "new"
@@ -151,7 +157,7 @@ func (a *App) productFilters(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	var lo, hi sql.NullInt64
-	if err := a.db.QueryRowContext(ctx, `SELECT MIN(price), MAX(price) FROM products WHERE is_active = 1`).Scan(&lo, &hi); err != nil {
+	if err := a.db.QueryRowContext(ctx, `SELECT MIN(`+effPrice+`), MAX(`+effPrice+`) FROM products p WHERE p.is_active = 1`).Scan(&lo, &hi); err != nil {
 		return err
 	}
 	return ok(w, map[string]any{"styles": styles, "colours": colours, "minPrice": lo.Int64, "maxPrice": hi.Int64})
@@ -204,10 +210,11 @@ func (a *App) relatedProducts(w http.ResponseWriter, r *http.Request) error {
 // ---------- Admin ----------
 
 type productInput struct {
-	set  []string
-	args []any
-	code string
-	name string
+	set   []string
+	args  []any
+	code  string
+	name  string
+	sizes *[]Size // nil when the form didn't send sizes; empty removes them
 }
 
 // readProductForm validates the product fields that were sent. When partial is false
@@ -250,14 +257,67 @@ func readProductForm(r *http.Request, partial bool) (*productInput, error) {
 		}
 		field("description", v)
 	}
-	if v, has, err := need("price"); err != nil {
-		return nil, err
-	} else if has {
+	// Buy and rent options. A piece can be sold, rented or both.
+	forSale, forRent := !partial, false
+	saleSent, rentSent := false, false
+	if v, has := get("forSale"); has {
+		forSale, saleSent = truthy(v), true
+	}
+	if v, has := get("forRent"); has {
+		forRent, rentSent = truthy(v), true
+	}
+	if saleSent || !partial {
+		field("for_sale", boolInt(forSale))
+	}
+	if rentSent || !partial {
+		field("for_rent", boolInt(forRent))
+	}
+	if (saleSent || !partial) && (rentSent || !partial) && !forSale && !forRent {
+		return nil, badField("forSale", "Choose whether this piece can be bought, rented or both")
+	}
+	wholeNumber := func(k, msg string, lo int) (int, bool, error) {
+		v, has := get(k)
+		if !has {
+			return 0, false, nil
+		}
 		n, err := strconv.ParseFloat(orZero(v), 64)
-		if err != nil || !isInt(n) || n <= 0 {
+		if err != nil || !isInt(n) || n < float64(lo) {
+			return 0, true, badField(k, msg)
+		}
+		return int(n), true, nil
+	}
+	if v, has := get("price"); has || !partial {
+		n, err := strconv.ParseFloat(orZero(v), 64)
+		if err != nil || !isInt(n) || n < 0 || (n == 0 && forSale) {
 			return nil, badField("price", "Enter a price above 0")
 		}
 		field("price", int(n))
+	}
+	rentFields := []struct {
+		key, col, msg string
+		lo, def       int
+	}{
+		{"rentPrice", "rent_price", "Enter the rent price", 0, 0},
+		{"rentDays", "rent_days", "Enter how many days the rent covers (1 or more)", 1, 3},
+		{"rentExtraDay", "rent_extra_day", "Enter the price per extra day (0 or more)", 0, 0},
+		{"rentDeposit", "rent_deposit", "Enter the deposit (0 or more)", 0, 0},
+		{"rentUnits", "rent_units", "Enter how many of this set you can rent out (1 or more)", 1, 1},
+	}
+	for _, f := range rentFields {
+		n, has, err := wholeNumber(f.key, f.msg, f.lo)
+		if err != nil {
+			return nil, err
+		}
+		if !has && partial {
+			continue
+		}
+		if !has {
+			n = f.def
+		}
+		if f.key == "rentPrice" && forRent && n <= 0 {
+			return nil, badField("rentPrice", "Enter the rent price")
+		}
+		field(f.col, n)
 	}
 	if v, has := get("stock"); has {
 		n, err := strconv.ParseFloat(orZero(v), 64)
@@ -307,7 +367,56 @@ func readProductForm(r *http.Request, partial bool) (*productInput, error) {
 			}
 		}
 	}
+	// Sizes arrive as JSON: [{"size": "2.4", "stock": 3}, ...]. With sizes, the stock is their total.
+	if v, has := get("sizes"); has {
+		var raw []struct {
+			Size  string  `json:"size"`
+			Stock float64 `json:"stock"`
+		}
+		if json.Unmarshal([]byte(v), &raw) != nil || len(raw) > 30 {
+			return nil, badField("sizes", "Check the sizes")
+		}
+		sizes := []Size{}
+		seen := map[string]bool{}
+		total := 0
+		for _, x := range raw {
+			x.Size = strings.TrimSpace(x.Size)
+			if x.Size == "" || len([]rune(x.Size)) > 12 || seen[x.Size] {
+				return nil, badField("sizes", "Each size needs a short, different name, like 2.4")
+			}
+			if !isInt(x.Stock) || x.Stock < 0 {
+				return nil, badField("sizes", "Enter a stock of 0 or more for size "+x.Size)
+			}
+			seen[x.Size] = true
+			total += int(x.Stock)
+			sizes = append(sizes, Size{Size: x.Size, Stock: int(x.Stock)})
+		}
+		in.sizes = &sizes
+		if len(sizes) > 0 {
+			for i, c := range in.set {
+				if c == "stock" {
+					in.args[i] = total
+				}
+			}
+			if !slices.Contains(in.set, "stock") {
+				field("stock", total)
+			}
+		}
+	}
 	return in, nil
+}
+
+// saveSizes replaces a product's sizes.
+func saveSizes(ctx context.Context, tx *sql.Tx, productID string, sizes []Size) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM product_sizes WHERE product_id = ?`, productID); err != nil {
+		return err
+	}
+	for i, sz := range sizes {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO product_sizes (id, product_id, size, stock, sort) VALUES (?, ?, ?, ?, ?)`, newID(), productID, sz.Size, sz.Stock, i); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) assertCodeFree(r *http.Request, code, exceptID string) error {
@@ -366,6 +475,11 @@ func (a *App) createProduct(w http.ResponseWriter, r *http.Request) error {
 		if _, err := tx.ExecContext(r.Context(), `INSERT INTO products (`+strings.Join(cols, ", ")+`) VALUES (`+placeholders(len(cols))+`)`, args...); err != nil {
 			return err
 		}
+		if in.sizes != nil {
+			if err := saveSizes(r.Context(), tx, id, *in.sizes); err != nil {
+				return err
+			}
+		}
 		for i, url := range urls {
 			if _, err := tx.ExecContext(r.Context(), `INSERT INTO product_images (id, url, sort, product_id) VALUES (?, ?, ?, ?)`, newID(), url, i, id); err != nil {
 				return err
@@ -421,6 +535,11 @@ func (a *App) updateProduct(w http.ResponseWriter, r *http.Request) error {
 				sets[i] = c + " = ?"
 			}
 			if _, err := tx.ExecContext(r.Context(), `UPDATE products SET `+strings.Join(sets, ", ")+` WHERE id = ?`, append(in.args, id)...); err != nil {
+				return err
+			}
+		}
+		if in.sizes != nil {
+			if err := saveSizes(r.Context(), tx, id, *in.sizes); err != nil {
 				return err
 			}
 		}

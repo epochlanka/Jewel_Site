@@ -3,7 +3,7 @@ import { icon } from "../../icons.js";
 import { api } from "../../api.js";
 import { dateTime, deliveryLabel, lkr, paymentLabel, paymentStatusLabel, phoneLink, statusLabel, whatsappLink } from "../../format.js";
 import { state, toast, toastError } from "../../store.js";
-import { confirmDialog, errorState, pageLoading, productImage, statusPill } from "../../ui.js";
+import { confirmDialog, errorState, lineDetail, pageLoading, productImage, statusPill } from "../../ui.js";
 
 const actionLabel = {
   PENDING: "Pending", CONFIRMED: "Confirm order", PROCESSING: "Start processing", READY: "Mark ready",
@@ -44,7 +44,7 @@ export default function orderDetail(view, ctx) {
           ${o.deliveryMethod === "DELIVERY" && html`<span>${shipTo.join(", ")}</span>`}
         </section>
         <table class="packing-slip-items"><thead><tr><th>Product</th><th>Qty</th></tr></thead>
-          <tbody>${o.items.map((i) => html`<tr><td>${i.name}</td><td>${i.qty}</td></tr>`)}</tbody></table>
+          <tbody>${o.items.map((i) => html`<tr><td>${i.name}${i.size ? ` (size ${i.size})` : ""}${i.kind === "RENT" ? ` (rent ${i.rentFrom} to ${i.rentTo})` : ""}</td><td>${i.qty}</td></tr>`)}</tbody></table>
         ${o.note && html`<p class="packing-slip-note"><strong>Note:</strong> ${o.note}</p>`}
       </section>
 
@@ -54,13 +54,14 @@ export default function orderDetail(view, ctx) {
             <div class="panel-head"><h2>Items</h2><span class="panel-meta">${o.items.reduce((n, i) => n + i.qty, 0)} pieces</span></div>
             <div class="order-lines">${o.items.map((i) => html`<div class="order-line">
               <span class="order-line-img">${productImage(i.product?.images[0]?.url, "")}</span>
-              <span><strong>${i.name}</strong> <span class="muted">× ${i.qty}</span>
-                <span class="muted" style="display: block; font-size: 13px">${i.product?.code ? `Code ${i.product.code} · ` : ""}${lkr(i.price)} each</span></span>
+              <span><strong>${i.name}</strong> <span class="muted">× ${i.qty}</span>${lineDetail(i)}
+                <span class="muted" style="display: block; font-size: 13px">${i.product?.code ? `Code ${i.product.code} · ` : ""}${i.kind === "RENT" ? `${lkr(i.price)} rent${i.deposit ? ` + ${lkr(i.deposit)} deposit` : ""}` : `${lkr(i.price)} each`}</span></span>
               <span class="num">${lkr(i.price * i.qty)}</span>
             </div>`)}</div>
             <div class="order-totals">
               <div class="summary-row"><span>Subtotal</span><span>${lkr(o.subtotal)}</span></div>
               <div class="summary-row"><span>${deliveryLabel[o.deliveryMethod]}</span><span>${o.deliveryFee ? lkr(o.deliveryFee) : "Free"}</span></div>
+              ${o.deposit > 0 && html`<div class="summary-row"><span>Refundable deposit</span><span>${lkr(o.deposit)}</span></div>`}
               <div class="summary-row summary-total"><span>Total</span><span>${lkr(o.total)}</span></div>
             </div>
           </section>
@@ -110,6 +111,14 @@ export default function orderDetail(view, ctx) {
             </dl>
           </section>
 
+          ${o.items.some((i) => i.kind === "RENT") && html`<section class="panel no-print">
+            <h2 style="font-size: 22px; margin-bottom: 14px">Rental</h2>
+            <dl class="kv">${o.items.filter((i) => i.kind === "RENT").map((i) => html`<dt>${i.name}</dt><dd>${i.rentFrom} to ${i.rentTo}</dd>`)}
+              <dt>Deposit</dt><dd>${lkr(o.deposit)}${o.depositRefundedAt ? ` · refunded ${dateTime(o.depositRefundedAt)}` : " · held"}</dd></dl>
+            ${!o.depositRefundedAt && o.status === "DELIVERED" && html`<div class="contact-actions"><button class="btn btn-primary btn-sm" data-act="returned"${attr("disabled", busy)}>${icon("check", 16)}Returned, deposit refunded</button></div>`}
+            ${!o.depositRefundedAt && o.status !== "DELIVERED" && o.status !== "CANCELLED" && html`<p class="muted" style="font-size: 14px; margin-top: 10px">When the customer has the pieces, mark the order delivered (or collected). Then mark it returned when they bring it back.</p>`}
+          </section>`}
+
           <section class="panel">
             <h2 style="font-size: 22px; margin-bottom: 14px">Payment</h2>
             <dl class="kv">
@@ -156,6 +165,14 @@ export default function orderDetail(view, ctx) {
     await load();
   });
   on(view, "click", "[data-act=print]", () => window.print());
+  on(view, "click", "[data-act=returned]", () => confirmDialog({
+    title: "Mark the rental returned?", confirmLabel: "Returned, deposit refunded",
+    body: `Confirm the pieces came back in good condition and you refunded the deposit of ${lkr(o.deposit)}. The customer is told.`,
+    onConfirm: async () => {
+      try { await api.admin.rentalReturned(o.id); toast("Rental marked returned"); await load(); }
+      catch (err) { toastError(err); throw err; }
+    },
+  }));
   on(view, "click", "[data-act=cancel]", () => confirmDialog({
     title: "Cancel this order?", danger: true, confirmLabel: "Cancel order",
     body: `The items go back into stock and the customer is told the order is cancelled.${o.paymentStatus === "PAID" ? " This order is marked as paid, so arrange a refund." : ""}`,

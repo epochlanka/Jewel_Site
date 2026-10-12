@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var orderStatuses = []string{"PENDING", "CONFIRMED", "PROCESSING", "READY", "DISPATCHED", "DELIVERED", "CANCELLED"}
@@ -38,7 +39,36 @@ type OrderItem struct {
 	Name      string            `json:"name"`
 	Price     int               `json:"price"`
 	Qty       int               `json:"qty"`
+	Size      string            `json:"size"`
+	Kind      string            `json:"kind"` // BUY or RENT
+	RentFrom  *string           `json:"rentFrom"`
+	RentTo    *string           `json:"rentTo"`
+	Deposit   int               `json:"deposit"`
 	Product   *OrderItemProduct `json:"product,omitempty"`
+}
+
+// label describes a line for messages, emails and reports, for example
+// "Gold bangles (size 2.4)" or "Bridal set (rent 12 Nov to 14 Nov)".
+func (it OrderItem) label() string {
+	out := it.Name
+	if it.Size != "" {
+		out += " (size " + it.Size + ")"
+	}
+	if it.Kind == "RENT" && it.RentFrom != nil && it.RentTo != nil {
+		out += " (rent " + shortDay(*it.RentFrom) + " to " + shortDay(*it.RentTo) + ")"
+	}
+	return out
+}
+
+// Label is label() for templates.
+func (it OrderItem) Label() string { return it.label() }
+
+func shortDay(d string) string {
+	t, err := time.ParseInLocation(dayLayout, d, time.Local)
+	if err != nil {
+		return d
+	}
+	return t.Format("2 Jan 2006")
 }
 
 type StatusLog struct {
@@ -54,31 +84,33 @@ type OrderUser struct {
 }
 
 type Order struct {
-	ID             string      `json:"id"`
-	OrderNo        string      `json:"orderNo"`
-	UserID         *string     `json:"userId"`
-	FullName       string      `json:"fullName"`
-	Mobile         string      `json:"mobile"`
-	Whatsapp       *string     `json:"whatsapp"`
-	Email          *string     `json:"email"`
-	Address        *string     `json:"address"`
-	City           *string     `json:"city"`
-	PostalCode     *string     `json:"postalCode"`
-	Note           *string     `json:"note"`
-	DeliveryMethod string      `json:"deliveryMethod"`
-	PaymentMethod  string      `json:"paymentMethod"`
-	PaymentStatus  string      `json:"paymentStatus"`
-	Subtotal       int         `json:"subtotal"`
-	DeliveryFee    int         `json:"deliveryFee"`
-	Total          int         `json:"total"`
-	Status         string      `json:"status"`
-	PaymentSlipURL *string     `json:"paymentSlipUrl"`
-	PaymentRef     *string     `json:"paymentRef"`
-	PaymentSlipAt  *string     `json:"paymentSlipAt"`
-	CreatedAt      string      `json:"createdAt"`
-	Items          []OrderItem `json:"items,omitempty"`
-	History        []StatusLog `json:"history,omitempty"`
-	Count          *struct {
+	ID                string      `json:"id"`
+	OrderNo           string      `json:"orderNo"`
+	UserID            *string     `json:"userId"`
+	FullName          string      `json:"fullName"`
+	Mobile            string      `json:"mobile"`
+	Whatsapp          *string     `json:"whatsapp"`
+	Email             *string     `json:"email"`
+	Address           *string     `json:"address"`
+	City              *string     `json:"city"`
+	PostalCode        *string     `json:"postalCode"`
+	Note              *string     `json:"note"`
+	DeliveryMethod    string      `json:"deliveryMethod"`
+	PaymentMethod     string      `json:"paymentMethod"`
+	PaymentStatus     string      `json:"paymentStatus"`
+	Subtotal          int         `json:"subtotal"`
+	DeliveryFee       int         `json:"deliveryFee"`
+	Total             int         `json:"total"`
+	Status            string      `json:"status"`
+	PaymentSlipURL    *string     `json:"paymentSlipUrl"`
+	PaymentRef        *string     `json:"paymentRef"`
+	PaymentSlipAt     *string     `json:"paymentSlipAt"`
+	Deposit           int         `json:"deposit"` // refundable rental deposits, included in Total
+	DepositRefundedAt *string     `json:"depositRefundedAt"`
+	CreatedAt         string      `json:"createdAt"`
+	Items             []OrderItem `json:"items,omitempty"`
+	History           []StatusLog `json:"history,omitempty"`
+	Count             *struct {
 		Items int `json:"items"`
 	} `json:"_count,omitempty"`
 	User         *OrderUser `json:"user,omitempty"`
@@ -88,15 +120,15 @@ type Order struct {
 
 const orderCols = `o.id, o.order_no, o.user_id, o.full_name, o.mobile, o.whatsapp, o.email, o.address, o.city, o.postal_code, o.note,
   o.delivery_method, o.payment_method, o.payment_status, o.subtotal, o.delivery_fee, o.total, o.status,
-  o.payment_slip_url, o.payment_ref, o.payment_slip_at, o.created_at`
+  o.payment_slip_url, o.payment_ref, o.payment_slip_at, o.deposit, o.deposit_refunded_at, o.created_at`
 
 func scanOrder(sc interface{ Scan(...any) error }) (Order, error) {
 	var o Order
-	var uid, wa, email, addr, city, postal, note, slip, ref, slipAt sql.NullString
+	var uid, wa, email, addr, city, postal, note, slip, ref, slipAt, refunded sql.NullString
 	err := sc.Scan(&o.ID, &o.OrderNo, &uid, &o.FullName, &o.Mobile, &wa, &email, &addr, &city, &postal, &note,
 		&o.DeliveryMethod, &o.PaymentMethod, &o.PaymentStatus, &o.Subtotal, &o.DeliveryFee, &o.Total, &o.Status,
-		&slip, &ref, &slipAt, &o.CreatedAt)
-	o.PaymentSlipURL, o.PaymentRef, o.PaymentSlipAt = strPtr(slip), strPtr(ref), strPtr(slipAt)
+		&slip, &ref, &slipAt, &o.Deposit, &refunded, &o.CreatedAt)
+	o.PaymentSlipURL, o.PaymentRef, o.PaymentSlipAt, o.DepositRefundedAt = strPtr(slip), strPtr(ref), strPtr(slipAt), strPtr(refunded)
 	o.UserID, o.Whatsapp, o.Email, o.Address, o.City, o.PostalCode, o.Note = strPtr(uid), strPtr(wa), strPtr(email), strPtr(addr), strPtr(city), strPtr(postal), strPtr(note)
 	return o, err
 }
@@ -130,7 +162,7 @@ func attachOrderDetail(ctx context.Context, q querier, orders []Order) error {
 		orders[i].Items, orders[i].History = []OrderItem{}, []StatusLog{}
 		index[orders[i].ID] = &orders[i]
 	}
-	rows, err := q.QueryContext(ctx, `SELECT oi.id, oi.order_id, oi.product_id, oi.name, oi.price, oi.qty, p.slug, p.code,
+	rows, err := q.QueryContext(ctx, `SELECT oi.id, oi.order_id, oi.product_id, oi.name, oi.price, oi.qty, oi.size, oi.kind, oi.rent_from, oi.rent_to, oi.deposit, p.slug, p.code,
 	  (SELECT pi.id FROM product_images pi WHERE pi.product_id = oi.product_id ORDER BY pi.sort, pi.id LIMIT 1),
 	  (SELECT pi.url FROM product_images pi WHERE pi.product_id = oi.product_id ORDER BY pi.sort, pi.id LIMIT 1)
 	  FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
@@ -140,11 +172,12 @@ func attachOrderDetail(ctx context.Context, q querier, orders []Order) error {
 	}
 	for rows.Next() {
 		var it OrderItem
-		var slug, code, imgID, imgURL sql.NullString
-		if err := rows.Scan(&it.ID, &it.OrderID, &it.ProductID, &it.Name, &it.Price, &it.Qty, &slug, &code, &imgID, &imgURL); err != nil {
+		var slug, code, imgID, imgURL, from, to sql.NullString
+		if err := rows.Scan(&it.ID, &it.OrderID, &it.ProductID, &it.Name, &it.Price, &it.Qty, &it.Size, &it.Kind, &from, &to, &it.Deposit, &slug, &code, &imgID, &imgURL); err != nil {
 			rows.Close()
 			return err
 		}
+		it.RentFrom, it.RentTo = strPtr(from), strPtr(to)
 		if slug.Valid {
 			it.Product = &OrderItemProduct{Slug: slug.String, Code: code.String, Images: []Image{}}
 			if imgURL.Valid {
@@ -287,49 +320,46 @@ func (a *App) placeOrder(ctx context.Context, cartID string, userID *string, in 
 	if in.DeliveryMethod == "PICKUP" && !s.PickupEnabled {
 		return "", httpErr(http.StatusBadRequest, "Store pickup isn't available right now.")
 	}
-	offers, err := activeOffers(ctx, a.db)
-	if err != nil {
-		return "", err
-	}
-
-	// The write lock is taken when the transaction starts, so stock checks and the
-	// order number can't race with another checkout.
+	// The write lock is taken when the transaction starts, so stock checks, rental
+	// bookings and the order number can't race with another checkout.
 	orderID := newID()
 	err = withTx(ctx, a.db, func(tx *sql.Tx) error {
-		live, err := queryProducts(ctx, tx, `SELECT `+productCols+` FROM cart_items ci JOIN products p ON p.id = ci.product_id
-		  WHERE ci.cart_id = ? AND p.is_active = 1 ORDER BY ci.id`, cartID)
+		lines, err := loadCartLines(ctx, tx, cartID)
 		if err != nil {
 			return err
 		}
-		if len(live) == 0 {
+		items, err := priceLines(ctx, tx, lines)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
 			return httpErr(http.StatusBadRequest, "Your cart is empty.")
 		}
-		qtyRows, err := tx.QueryContext(ctx, `SELECT product_id, qty FROM cart_items WHERE cart_id = ?`, cartID)
-		if err != nil {
-			return err
-		}
-		qty := map[string]int{}
-		for qtyRows.Next() {
-			var pid string
-			var n int
-			if err := qtyRows.Scan(&pid, &n); err != nil {
-				qtyRows.Close()
-				return err
+		subtotal, deposit := 0, 0
+		for _, it := range items {
+			if !it.InStock {
+				return httpErr(http.StatusConflict, "%s: %s", it.Product.Name, it.Problem)
 			}
-			qty[pid] = n
-		}
-		qtyRows.Close()
-
-		subtotal := 0
-		for _, p := range live {
-			res, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`, qty[p.ID], p.ID, qty[p.ID])
-			if err != nil {
-				return err
+			if it.Kind == "BUY" {
+				res, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`, it.Qty, it.ProductID, it.Qty)
+				if err != nil {
+					return err
+				}
+				if n, _ := res.RowsAffected(); n == 0 {
+					return httpErr(http.StatusConflict, "%s doesn't have enough stock. Update your cart and try again.", it.Product.Name)
+				}
+				if it.Size != "" {
+					res, err := tx.ExecContext(ctx, `UPDATE product_sizes SET stock = stock - ? WHERE product_id = ? AND size = ? AND stock >= ?`, it.Qty, it.ProductID, it.Size, it.Qty)
+					if err != nil {
+						return err
+					}
+					if n, _ := res.RowsAffected(); n == 0 {
+						return httpErr(http.StatusConflict, "%s in size %s doesn't have enough stock. Update your cart and try again.", it.Product.Name, it.Size)
+					}
+				}
 			}
-			if n, _ := res.RowsAffected(); n == 0 {
-				return httpErr(http.StatusConflict, "%s doesn't have enough stock. Update your cart and try again.", p.Name)
-			}
-			subtotal += unitPrice(p, offers) * qty[p.ID]
+			subtotal += it.LineTotal
+			deposit += it.Deposit
 		}
 		fee := 0
 		if in.DeliveryMethod == "DELIVERY" {
@@ -341,15 +371,20 @@ func (a *App) placeOrder(ctx context.Context, cartID string, userID *string, in 
 		}
 		now := nowTS()
 		if _, err := tx.ExecContext(ctx, `INSERT INTO orders (id, order_no, user_id, full_name, mobile, whatsapp, email, address, city, postal_code, note,
-		  delivery_method, payment_method, payment_status, subtotal, delivery_fee, total, status, created_at)
-		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNPAID', ?, ?, ?, 'PENDING', ?)`,
+		  delivery_method, payment_method, payment_status, subtotal, delivery_fee, deposit, total, status, created_at)
+		  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'UNPAID', ?, ?, ?, ?, 'PENDING', ?)`,
 			orderID, orderNo, nullStr(userID), in.FullName, in.Mobile, nullStr(in.Whatsapp), nullStr(in.Email), nullStr(in.Address), nullStr(in.City),
-			nullStr(in.PostalCode), nullStr(in.Note), in.DeliveryMethod, in.PaymentMethod, subtotal, fee, subtotal+fee, now); err != nil {
+			nullStr(in.PostalCode), nullStr(in.Note), in.DeliveryMethod, in.PaymentMethod, subtotal, fee, deposit, subtotal+fee+deposit, now); err != nil {
 			return err
 		}
-		for _, p := range live {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO order_items (id, order_id, product_id, name, price, qty) VALUES (?, ?, ?, ?, ?, ?)`,
-				newID(), orderID, p.ID, p.Name, unitPrice(p, offers), qty[p.ID]); err != nil {
+		for _, it := range items {
+			var from, to any
+			if it.Kind == "RENT" {
+				from, to = it.RentFrom, it.RentTo
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO order_items (id, order_id, product_id, name, price, qty, size, kind, rent_from, rent_to, deposit)
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				newID(), orderID, it.ProductID, it.Product.Name, it.UnitPrice, it.Qty, it.Size, it.Kind, from, to, it.Deposit); err != nil {
 				return err
 			}
 		}
@@ -450,8 +485,16 @@ func (a *App) changeStatus(ctx context.Context, orderID, to string) (*Order, err
 	err = withTx(ctx, a.db, func(tx *sql.Tx) error {
 		if to == "CANCELLED" {
 			for _, it := range o.Items {
+				if it.Kind == "RENT" {
+					continue // cancelling frees the rental dates; there is no stock to return
+				}
 				if _, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock + ? WHERE id = ?`, it.Qty, it.ProductID); err != nil {
 					return err
+				}
+				if it.Size != "" {
+					if _, err := tx.ExecContext(ctx, `UPDATE product_sizes SET stock = stock + ? WHERE product_id = ? AND size = ?`, it.Qty, it.ProductID, it.Size); err != nil {
+						return err
+					}
 				}
 			}
 		}

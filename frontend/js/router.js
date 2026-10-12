@@ -33,9 +33,11 @@ const table = [
   ["/admin/products/:id", "admin/product-form", "admin", "admin"],
   ["/admin/categories", "admin/categories", "admin", "admin"],
   ["/admin/customers", "admin/customers", "admin", "admin"],
+  ["/admin/rentals", "admin/rentals", "admin", "admin"],
   ["/admin/offers", "admin/offers", "admin", "admin"],
   ["/admin/reports", "admin/reports", "admin", "admin"],
   ["/admin/settings", "admin/settings", "admin", "admin"],
+  ["/admin/account", "admin/account", "admin", "admin"],
 ];
 
 const routes = table.map(([path, page, layout, guard]) => {
