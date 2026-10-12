@@ -1,6 +1,8 @@
 import { html, setHtml, on, $ } from "../../html.js";
 import { api } from "../../api.js";
 import { lkr, shortDate, statusLabel } from "../../format.js";
+import { icon } from "../../icons.js";
+import { toastError } from "../../store.js";
 import { barChart, errorState, pageLoading } from "../../ui.js";
 
 const ranges = [{ v: "daily", label: "Daily" }, { v: "weekly", label: "Weekly" }, { v: "monthly", label: "Monthly" }];
@@ -17,6 +19,17 @@ export default function reports(view) {
 
   setHtml(view, html`<div class="admin-page">
     <div class="admin-head"><div><h1>Reports</h1><p>Cancelled orders are left out of sales.</p></div></div>
+    <section class="panel">
+      <div class="panel-head"><h2>Download a PDF report</h2></div>
+      <form class="pdf-form" data-pdf>
+        <label class="field"><span class="field-label">Report</span><select name="type">
+          <option value="sales">Sales report</option><option value="orders">Orders report</option><option value="stock">Stock report</option></select></label>
+        <label class="field"><span class="field-label">From</span><input name="from" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 8)}01" required></label>
+        <label class="field"><span class="field-label">To</span><input name="to" type="date" value="${new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}" required></label>
+        <button class="btn btn-primary" data-pdf-btn>${icon("download", 18)}Download PDF</button>
+      </form>
+      <p class="field-hint" style="margin-top: 10px">The stock report shows stock as it is today, so it ignores the dates.</p>
+    </section>
     <section class="panel">
       <div class="panel-head"><h2>Sales</h2><div class="tabs" role="group" aria-label="Period" data-ranges></div></div>
       <div data-sales>${pageLoading()}</div>
@@ -46,6 +59,20 @@ export default function reports(view) {
     }).catch(fail);
   };
 
+  on(view, "submit", "[data-pdf]", async (e, form) => {
+    e.preventDefault();
+    const btn = $("[data-pdf-btn]", view);
+    btn.disabled = true;
+    try {
+      const { blob, name } = await api.admin.reportPdf(Object.fromEntries(new FormData(form)));
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (err) { toastError(err); }
+    btn.disabled = false;
+  });
   on(view, "click", "[data-range]", (e, el) => { range = el.dataset.range; loadSales(); });
   loadSales();
 

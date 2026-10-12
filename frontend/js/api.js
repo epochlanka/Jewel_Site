@@ -110,6 +110,11 @@ export const api = {
     salesReport: (range) => req(`/admin/reports/sales?range=${range}`),
     ordersReport: () => req("/admin/reports/orders"),
     productsReport: () => req("/admin/reports/products"),
+    reportPdf: async (q) => {
+      const res = await fetch(`/api/admin/reports/pdf?${qs(q)}`, { headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {} });
+      if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => ({}))).error ?? "Couldn't create the report. Try again.");
+      return { blob: await res.blob(), name: /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "report.pdf" };
+    },
 
     saveSettings: (b) => req("/settings", json("PUT", b)),
   },

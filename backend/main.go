@@ -132,6 +132,7 @@ func (a *App) routes() http.Handler {
 	admin("GET /api/admin/reports/sales", a.salesReport)
 	admin("GET /api/admin/reports/orders", a.ordersReport)
 	admin("GET /api/admin/reports/products", a.productsReport)
+	admin("GET /api/admin/reports/pdf", a.reportPDF)
 
 	route("/api/", func(w http.ResponseWriter, r *http.Request) error { return httpErr(http.StatusNotFound, "Not found") })
 

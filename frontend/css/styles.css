@@ -1022,3 +1022,5 @@ a.stock-name:hover { color: var(--accent); text-decoration: underline; }
   .table .num { text-align: right; }
   .table td > span[style*="display: block"] { display: inline !important; margin-left: 6px; }
 }
+.pdf-form { display: grid; grid-template-columns: 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; }
+@media (max-width: 760px) { .pdf-form { grid-template-columns: 1fr 1fr; } .pdf-form .field:first-child, .pdf-form .btn { grid-column: 1 / -1; } }
