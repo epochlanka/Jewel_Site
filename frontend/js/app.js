@@ -12,6 +12,12 @@ on(document, "click", "[data-add-to-cart]", async (e, btn) => {
 });
 on(document, "click", "[data-wish]", (e, btn) => toggleWish(btn.dataset.wish, btn.dataset.name));
 on(document, "click", "[data-toggle-password]", (e, btn) => togglePassword(btn));
+// Colour dots on a product card show that colour's photo.
+on(document, "click", "[data-card-colour]", (e, btn) => {
+  const card = btn.closest(".pcard"), img = card?.querySelector(".pcard-media img");
+  card.querySelectorAll("[data-card-colour]").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+  if (img && btn.dataset.cardColour) img.src = btn.dataset.cardColour;
+});
 watchBrokenImages();
 
 // On phones, tables are shown as cards; each cell gets its column name as a label.

@@ -9,7 +9,7 @@ import { lkr } from "../format.js";
 export default async function product(view, ctx) {
   const slug = ctx.params.slug;
   let p = null, related = [], img = 0, qty = 1, busy = false;
-  let mode = "buy", size = null, from = "", to = "", bookings = null;
+  let mode = "buy", size = null, colour = null, from = "", to = "", bookings = null;
 
   setHtml(view, pageLoading());
   try {
@@ -22,13 +22,28 @@ export default async function product(view, ctx) {
     return;
   }
 
-  const images = p.images;
   const sized = p.sizes.length > 0;
+  const coloured = p.colours.length > 0;
   if (!p.forSale) mode = "rent";
-  // In stock for the chosen size, or for the piece when it has no sizes.
-  const stockNow = () => (sized ? (p.sizes.find((x) => x.size === size)?.stock ?? 0) : p.stock);
+  // Photos of the chosen colour first, then photos that show any colour.
+  const shownImages = () => {
+    if (!colour || !p.images.some((im) => im.colour === colour)) return p.images;
+    return [...p.images.filter((im) => im.colour === colour), ...p.images.filter((im) => !im.colour)];
+  };
+  // Stock for a colour and size, matching the server's rules.
+  const stockFor = (c, sz) => {
+    if (coloured && sized) {
+      if (!c) return p.sizes.find((x) => x.size === sz)?.stock ?? 0;
+      if (!sz) return p.colours.find((x) => x.name === c)?.stock ?? 0;
+      return p.variants.find((v) => v.colour === c && v.size === sz)?.stock ?? 0;
+    }
+    if (coloured) return p.colours.find((x) => x.name === c)?.stock ?? 0;
+    if (sized) return p.sizes.find((x) => x.size === sz)?.stock ?? 0;
+    return p.stock;
+  };
+  const stockNow = () => stockFor(colour, size);
   const soldOut = p.forSale && p.stock <= 0;
-  const low = !soldOut && !sized && p.stock <= 3;
+  const low = !soldOut && !sized && !coloured && p.stock <= 3;
   if (p.forRent) api.bookings(slug).then((b) => { bookings = b; if (mode === "rent") drawBuy(); }).catch(() => { bookings = { units: p.rentUnits, bookings: [] }; });
 
   const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -40,7 +55,10 @@ export default async function product(view, ctx) {
     const saved = state.wishIds.has(p.id);
     return html`<button class="btn btn-quiet btn-sm" aria-pressed="${String(saved)}" data-act="wish">${icon("heart", 18, saved)}${saved ? "Saved" : "Save to wishlist"}</button>`;
   };
-  const gallery = () => html`
+  const gallery = () => {
+    const images = shownImages();
+    if (img >= images.length) img = 0;
+    return html`
     <div class="gallery-main">
       ${productImage(images[img]?.url, `${p.name}${images.length > 1 ? `, photo ${img + 1} of ${images.length}` : ""}`, { type: p.jewelleryType, iconSize: 160 })}
       ${images.length > 1 && html`
@@ -49,19 +67,28 @@ export default async function product(view, ctx) {
     </div>
     ${images.length > 1 && html`<div class="thumbs">${images.map((im, i) => html`
       <button class="thumb" aria-current="${String(i === img)}" aria-label="Show photo ${i + 1}" data-photo="${i}">${productImage(im.url, "", { type: p.jewelleryType, iconSize: 32 })}</button>`)}</div>`}`;
+  };
   const buyPanel = () => {
     const stock = stockNow();
+    const needColour = coloured && !colour;
     const needSize = sized && !size;
+    const needChoice = needColour || needSize;
     return html`
+      ${coloured && html`<div class="colour-pick">
+        <div class="size-pick-head"><strong>Colour</strong><span class="muted">${colour ?? "Choose a colour"}</span></div>
+        <div class="colour-chips" role="radiogroup" aria-label="Colour">${p.colours.map((c) => html`
+          <button type="button" class="swatch" role="radio" style="--swatch: ${c.hex}" aria-checked="${String(colour === c.name)}" data-colour="${c.name}"
+            title="${c.name}${c.stock <= 0 ? " (sold out)" : ""}" aria-label="${c.name}${c.stock <= 0 ? ", sold out" : ""}"${attr("disabled", c.stock <= 0)}></button>`)}</div>
+      </div>`}
       ${sized && html`<div class="size-pick">
         <div class="size-pick-head"><strong>Size</strong>${size ? html`<span class="muted">${stock > 0 && stock <= 3 ? `Only ${stock} left in ${size}` : `Size ${size}`}</span>` : html`<span class="muted">Choose your size</span>`}</div>
         <div class="size-chips" role="radiogroup" aria-label="Size">${p.sizes.map((x) => html`
-          <button type="button" class="size-chip" role="radio" aria-checked="${String(size === x.size)}" data-size="${x.size}"${attr("disabled", x.stock <= 0)}>
-            ${x.size}${x.stock <= 0 && html`<span class="size-chip-out">Sold out</span>`}</button>`)}</div>
+          <button type="button" class="size-chip" role="radio" aria-checked="${String(size === x.size)}" data-size="${x.size}"${attr("disabled", stockFor(colour, x.size) <= 0)}>
+            ${x.size}${stockFor(colour, x.size) <= 0 && html`<span class="size-chip-out">Sold out</span>`}</button>`)}</div>
       </div>`}
       <div class="pdp-buy-row">
-        ${!soldOut && !needSize && stock > 0 && qtyStepper(qty, Math.min(stock, 20))}
-        <button class="btn btn-primary btn-lg" data-act="add"${attr("disabled", soldOut || busy || needSize)}>${soldOut ? "Sold out" : needSize ? "Choose a size" : busy ? "Adding…" : "Add to cart"}</button>
+        ${!soldOut && !needChoice && stock > 0 && qtyStepper(qty, Math.min(stock, 20))}
+        <button class="btn btn-primary btn-lg" data-act="add"${attr("disabled", soldOut || busy || needChoice || stock <= 0)}>${soldOut ? "Sold out" : needColour ? "Choose a colour" : needSize ? "Choose a size" : stock <= 0 ? "Sold out in this choice" : busy ? "Adding…" : "Add to cart"}</button>
       </div>`;
   };
 
@@ -149,6 +176,14 @@ export default async function product(view, ctx) {
   on(view, "click", "[data-step]", (e, el) => { qty += Number(el.dataset.step); drawBuy(); });
   on(view, "click", "[data-mode]", (e, el) => { mode = el.dataset.mode; drawBuy(); });
   on(view, "click", "[data-size]", (e, el) => { size = el.dataset.size; qty = 1; drawBuy(); });
+  on(view, "click", "[data-colour]", (e, el) => {
+    colour = el.dataset.colour;
+    qty = 1;
+    if (size && stockFor(colour, size) <= 0) size = null; // that size isn't available in this colour
+    img = 0;
+    setHtml($("[data-gallery]", view), gallery());
+    drawBuy();
+  });
   on(view, "change", "[data-rent]", (e, el) => {
     if (el.dataset.rent === "from") { from = el.value; if (to && to < from) to = ""; if (!to && from) to = from; }
     else to = el.value;
@@ -156,7 +191,8 @@ export default async function product(view, ctx) {
   });
   on(view, "click", "[data-act=add]", async () => {
     busy = true; drawBuy();
-    await addToCart([{ productId: p.id, qty, ...(size ? { size } : {}) }], `${p.name}${size ? ` (size ${size})` : ""} added to cart`);
+    const choice = [colour, size && `size ${size}`].filter(Boolean).join(", ");
+    await addToCart([{ productId: p.id, qty, ...(size ? { size } : {}), ...(colour ? { colour } : {}) }], `${p.name}${choice ? ` (${choice})` : ""} added to cart`);
     busy = false; drawBuy();
   });
   on(view, "click", "[data-act=rent]", async () => {

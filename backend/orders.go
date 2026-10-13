@@ -39,6 +39,7 @@ type OrderItem struct {
 	Name      string            `json:"name"`
 	Price     int               `json:"price"`
 	Qty       int               `json:"qty"`
+	Colour    string            `json:"colour"`
 	Size      string            `json:"size"`
 	Kind      string            `json:"kind"` // BUY or RENT
 	RentFrom  *string           `json:"rentFrom"`
@@ -48,11 +49,18 @@ type OrderItem struct {
 }
 
 // label describes a line for messages, emails and reports, for example
-// "Gold bangles (size 2.4)" or "Bridal set (rent 12 Nov to 14 Nov)".
+// "Gold bangles (Rose gold, size 2.4)" or "Bridal set (rent 12 Nov to 14 Nov)".
 func (it OrderItem) label() string {
 	out := it.Name
+	var choice []string
+	if it.Colour != "" {
+		choice = append(choice, it.Colour)
+	}
 	if it.Size != "" {
-		out += " (size " + it.Size + ")"
+		choice = append(choice, "size "+it.Size)
+	}
+	if len(choice) > 0 {
+		out += " (" + strings.Join(choice, ", ") + ")"
 	}
 	if it.Kind == "RENT" && it.RentFrom != nil && it.RentTo != nil {
 		out += " (rent " + shortDay(*it.RentFrom) + " to " + shortDay(*it.RentTo) + ")"
@@ -162,7 +170,7 @@ func attachOrderDetail(ctx context.Context, q querier, orders []Order) error {
 		orders[i].Items, orders[i].History = []OrderItem{}, []StatusLog{}
 		index[orders[i].ID] = &orders[i]
 	}
-	rows, err := q.QueryContext(ctx, `SELECT oi.id, oi.order_id, oi.product_id, oi.name, oi.price, oi.qty, oi.size, oi.kind, oi.rent_from, oi.rent_to, oi.deposit, p.slug, p.code,
+	rows, err := q.QueryContext(ctx, `SELECT oi.id, oi.order_id, oi.product_id, oi.name, oi.price, oi.qty, oi.colour, oi.size, oi.kind, oi.rent_from, oi.rent_to, oi.deposit, p.slug, p.code,
 	  (SELECT pi.id FROM product_images pi WHERE pi.product_id = oi.product_id ORDER BY pi.sort, pi.id LIMIT 1),
 	  (SELECT pi.url FROM product_images pi WHERE pi.product_id = oi.product_id ORDER BY pi.sort, pi.id LIMIT 1)
 	  FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
@@ -173,7 +181,7 @@ func attachOrderDetail(ctx context.Context, q querier, orders []Order) error {
 	for rows.Next() {
 		var it OrderItem
 		var slug, code, imgID, imgURL, from, to sql.NullString
-		if err := rows.Scan(&it.ID, &it.OrderID, &it.ProductID, &it.Name, &it.Price, &it.Qty, &it.Size, &it.Kind, &from, &to, &it.Deposit, &slug, &code, &imgID, &imgURL); err != nil {
+		if err := rows.Scan(&it.ID, &it.OrderID, &it.ProductID, &it.Name, &it.Price, &it.Qty, &it.Colour, &it.Size, &it.Kind, &from, &to, &it.Deposit, &slug, &code, &imgID, &imgURL); err != nil {
 			rows.Close()
 			return err
 		}
@@ -341,21 +349,12 @@ func (a *App) placeOrder(ctx context.Context, cartID string, userID *string, in 
 				return httpErr(http.StatusConflict, "%s: %s", it.Product.Name, it.Problem)
 			}
 			if it.Kind == "BUY" {
-				res, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?`, it.Qty, it.ProductID, it.Qty)
+				enough, err := takeStock(ctx, tx, it.Product, it.Colour, it.Size, -it.Qty)
 				if err != nil {
 					return err
 				}
-				if n, _ := res.RowsAffected(); n == 0 {
+				if !enough {
 					return httpErr(http.StatusConflict, "%s doesn't have enough stock. Update your cart and try again.", it.Product.Name)
-				}
-				if it.Size != "" {
-					res, err := tx.ExecContext(ctx, `UPDATE product_sizes SET stock = stock - ? WHERE product_id = ? AND size = ? AND stock >= ?`, it.Qty, it.ProductID, it.Size, it.Qty)
-					if err != nil {
-						return err
-					}
-					if n, _ := res.RowsAffected(); n == 0 {
-						return httpErr(http.StatusConflict, "%s in size %s doesn't have enough stock. Update your cart and try again.", it.Product.Name, it.Size)
-					}
 				}
 			}
 			subtotal += it.LineTotal
@@ -382,9 +381,9 @@ func (a *App) placeOrder(ctx context.Context, cartID string, userID *string, in 
 			if it.Kind == "RENT" {
 				from, to = it.RentFrom, it.RentTo
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO order_items (id, order_id, product_id, name, price, qty, size, kind, rent_from, rent_to, deposit)
-			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				newID(), orderID, it.ProductID, it.Product.Name, it.UnitPrice, it.Qty, it.Size, it.Kind, from, to, it.Deposit); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO order_items (id, order_id, product_id, name, price, qty, colour, size, kind, rent_from, rent_to, deposit)
+			  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				newID(), orderID, it.ProductID, it.Product.Name, it.UnitPrice, it.Qty, it.Colour, it.Size, it.Kind, from, to, it.Deposit); err != nil {
 				return err
 			}
 		}
@@ -484,17 +483,21 @@ func (a *App) changeStatus(ctx context.Context, orderID, to string) (*Order, err
 	}
 	err = withTx(ctx, a.db, func(tx *sql.Tx) error {
 		if to == "CANCELLED" {
+			ids := make([]string, 0, len(o.Items))
 			for _, it := range o.Items {
-				if it.Kind == "RENT" {
+				ids = append(ids, it.ProductID)
+			}
+			products, err := productsByID(ctx, tx, ids)
+			if err != nil {
+				return err
+			}
+			for _, it := range o.Items {
+				p, found := products[it.ProductID]
+				if it.Kind == "RENT" || !found {
 					continue // cancelling frees the rental dates; there is no stock to return
 				}
-				if _, err := tx.ExecContext(ctx, `UPDATE products SET stock = stock + ? WHERE id = ?`, it.Qty, it.ProductID); err != nil {
+				if _, err := takeStock(ctx, tx, p, it.Colour, it.Size, it.Qty); err != nil {
 					return err
-				}
-				if it.Size != "" {
-					if _, err := tx.ExecContext(ctx, `UPDATE product_sizes SET stock = stock + ? WHERE product_id = ? AND size = ?`, it.Qty, it.ProductID, it.Size); err != nil {
-						return err
-					}
 				}
 			}
 		}

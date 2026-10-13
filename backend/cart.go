@@ -9,13 +9,14 @@ import (
 	"strings"
 )
 
-// A cart line is either a purchase (BUY, optionally in a size) or a rental (RENT) for a
+// A cart line is either a purchase (BUY, optionally in a colour and size) or a rental (RENT) for a
 // pickup and return date. Rentals are always one piece per line.
 type CartItem struct {
 	ID        string  `json:"id"`
 	CartID    string  `json:"cartId"`
 	ProductID string  `json:"productId"`
 	Qty       int     `json:"qty"`
+	Colour    string  `json:"colour"`
 	Size      string  `json:"size"`
 	Kind      string  `json:"kind"`
 	RentFrom  string  `json:"rentFrom"`
@@ -59,7 +60,7 @@ func (a *App) resolveCart(ctx context.Context, q querier, r *http.Request) (stri
 }
 
 func loadCartLines(ctx context.Context, q querier, cartID string) ([]CartItem, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, product_id, qty, size, kind, rent_from, rent_to FROM cart_items WHERE cart_id = ? ORDER BY id`, cartID)
+	rows, err := q.QueryContext(ctx, `SELECT id, product_id, qty, colour, size, kind, rent_from, rent_to FROM cart_items WHERE cart_id = ? ORDER BY id`, cartID)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +68,7 @@ func loadCartLines(ctx context.Context, q querier, cartID string) ([]CartItem, e
 	var out []CartItem
 	for rows.Next() {
 		it := CartItem{CartID: cartID}
-		if err := rows.Scan(&it.ID, &it.ProductID, &it.Qty, &it.Size, &it.Kind, &it.RentFrom, &it.RentTo); err != nil {
+		if err := rows.Scan(&it.ID, &it.ProductID, &it.Qty, &it.Colour, &it.Size, &it.Kind, &it.RentFrom, &it.RentTo); err != nil {
 			return nil, err
 		}
 		out = append(out, it)
@@ -88,19 +89,6 @@ func productsByID(ctx context.Context, q querier, ids []string) (map[string]Prod
 		out[p.ID] = p
 	}
 	return out, nil
-}
-
-// available is how many of a piece (in a size, when it has sizes) can be bought.
-func available(p Product, size string) (int, bool) {
-	if len(p.Sizes) == 0 {
-		return p.Stock, size == ""
-	}
-	for _, s := range p.Sizes {
-		if s.Size == size {
-			return s.Stock, true
-		}
-	}
-	return 0, false
 }
 
 // priceLines fills in prices and checks every line. It is shared by the cart and checkout.
@@ -152,13 +140,13 @@ func priceLines(ctx context.Context, q querier, lines []CartItem) ([]CartItem, e
 			if p.SalePrice != nil {
 				it.UnitPrice = *p.SalePrice
 			}
-			stock, sizeOK := available(p, it.Size)
+			stock, sizeOK := stockOf(p, it.Colour, it.Size)
 			it.MaxQty = max(1, min(stock, 20))
 			switch {
 			case !p.ForSale:
 				it.InStock, it.Problem = false, "No longer for sale. Remove it to continue."
 			case !sizeOK:
-				it.InStock, it.Problem = false, "This size is no longer available. Remove it to continue."
+				it.InStock, it.Problem = false, "This colour or size is no longer available. Remove it to continue."
 			case stock < it.Qty && stock > 0:
 				it.InStock, it.Problem = false, "Only "+strconv.Itoa(stock)+" left. Lower the quantity to continue."
 			case stock < it.Qty:
@@ -227,7 +215,7 @@ func readQty(raw map[string]any, def int) (int, bool) {
 	return int(f), true
 }
 
-// Body: { items: [{ productId, qty, size?, rentFrom?, rentTo? }] }. Lines with rental
+// Body: { items: [{ productId, qty, colour?, size?, rentFrom?, rentTo? }] }. Lines with rental
 // dates are bookings; the others are purchases.
 func (a *App) addToCart(w http.ResponseWriter, r *http.Request) error {
 	b, err := readBody(r)
@@ -248,6 +236,8 @@ func (a *App) addToCart(w http.ResponseWriter, r *http.Request) error {
 		for _, it := range raw {
 			pid, _ := it["productId"].(string)
 			size, _ := it["size"].(string)
+			colour, _ := it["colour"].(string)
+			colour = strings.TrimSpace(colour)
 			from, _ := it["rentFrom"].(string)
 			to, _ := it["rentTo"].(string)
 			size = strings.TrimSpace(size)
@@ -273,7 +263,7 @@ func (a *App) addToCart(w http.ResponseWriter, r *http.Request) error {
 					return err
 				}
 				res, err := tx.ExecContext(ctx, `INSERT INTO cart_items (id, cart_id, product_id, qty, kind, rent_from, rent_to) VALUES (?, ?, ?, 1, 'RENT', ?, ?)
-				  ON CONFLICT (cart_id, product_id, size, kind, rent_from) DO NOTHING`, newID(), cartID, pid, d.From, d.To)
+				  ON CONFLICT (cart_id, product_id, colour, size, kind, rent_from) DO NOTHING`, newID(), cartID, pid, d.From, d.To)
 				if err != nil {
 					return err
 				}
@@ -286,28 +276,31 @@ func (a *App) addToCart(w http.ResponseWriter, r *http.Request) error {
 			if !p.ForSale {
 				return httpErr(http.StatusBadRequest, "%s is for rent only. Choose your dates to book it.", p.Name)
 			}
+			if len(p.Colours) > 0 && colour == "" {
+				return badField("colour", "Choose a colour")
+			}
 			if len(p.Sizes) > 0 && size == "" {
 				return badField("size", "Choose a size")
 			}
-			stock, sizeOK := available(p, size)
-			if !sizeOK {
-				return badField("size", "That size isn't available")
+			stock, choiceOK := stockOf(p, colour, size)
+			if !choiceOK {
+				return badField("size", "That colour or size isn't available")
 			}
 			var existing int
-			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(qty), 0) FROM cart_items WHERE cart_id = ? AND product_id = ? AND size = ? AND kind = 'BUY'`,
-				cartID, pid, size).Scan(&existing); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(qty), 0) FROM cart_items WHERE cart_id = ? AND product_id = ? AND colour = ? AND size = ? AND kind = 'BUY'`,
+				cartID, pid, colour, size).Scan(&existing); err != nil {
 				return err
 			}
 			want := existing + qty
 			if stock < want {
 				name := p.Name
-				if size != "" {
-					name += " in size " + size
+				if choice := strings.TrimSpace(strings.Join(nonEmpty(colour, size), " ")); choice != "" {
+					name += " in " + choice
 				}
 				return stockError(name, stock)
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO cart_items (id, cart_id, product_id, qty, size, kind) VALUES (?, ?, ?, ?, ?, 'BUY')
-			  ON CONFLICT (cart_id, product_id, size, kind, rent_from) DO UPDATE SET qty = ?`, newID(), cartID, pid, qty, size, want); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cart_items (id, cart_id, product_id, qty, colour, size, kind) VALUES (?, ?, ?, ?, ?, ?, 'BUY')
+			  ON CONFLICT (cart_id, product_id, colour, size, kind, rent_from) DO UPDATE SET qty = ?`, newID(), cartID, pid, qty, colour, size, want); err != nil {
 				return err
 			}
 		}
@@ -336,8 +329,8 @@ func (a *App) setCartQty(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	var pid, size, kind string
-	err = a.db.QueryRowContext(ctx, `SELECT product_id, size, kind FROM cart_items WHERE id = ? AND cart_id = ?`, r.PathValue("itemId"), cartID).Scan(&pid, &size, &kind)
+	var pid, colour, size, kind string
+	err = a.db.QueryRowContext(ctx, `SELECT product_id, colour, size, kind FROM cart_items WHERE id = ? AND cart_id = ?`, r.PathValue("itemId"), cartID).Scan(&pid, &colour, &size, &kind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return errNotFound
 	}
@@ -355,7 +348,7 @@ func (a *App) setCartQty(w http.ResponseWriter, r *http.Request) error {
 	if !found {
 		return httpErr(http.StatusNotFound, "This product isn't available.")
 	}
-	if stock, _ := available(p, size); stock < qty {
+	if stock, _ := stockOf(p, colour, size); stock < qty {
 		return stockError(p.Name, stock)
 	}
 	if _, err := a.db.ExecContext(ctx, `UPDATE cart_items SET qty = ? WHERE id = ? AND cart_id = ?`, qty, r.PathValue("itemId"), cartID); err != nil {
@@ -407,9 +400,9 @@ func (a *App) mergeCart(w http.ResponseWriter, r *http.Request) error {
 		var guestCart string
 		err = tx.QueryRowContext(ctx, `SELECT id FROM carts WHERE guest_key = ?`, guestKey).Scan(&guestCart)
 		if err == nil && guestCart != userCart {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO cart_items (id, cart_id, product_id, qty, size, kind, rent_from, rent_to)
-			  SELECT id || 'm', ?, product_id, qty, size, kind, rent_from, rent_to FROM cart_items WHERE cart_id = ? AND true
-			  ON CONFLICT (cart_id, product_id, size, kind, rent_from)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO cart_items (id, cart_id, product_id, qty, colour, size, kind, rent_from, rent_to)
+			  SELECT id || 'm', ?, product_id, qty, colour, size, kind, rent_from, rent_to FROM cart_items WHERE cart_id = ? AND true
+			  ON CONFLICT (cart_id, product_id, colour, size, kind, rent_from)
 			  DO UPDATE SET qty = CASE WHEN cart_items.kind = 'BUY' THEN cart_items.qty + excluded.qty ELSE cart_items.qty END`, userCart, guestCart); err != nil {
 				return err
 			}

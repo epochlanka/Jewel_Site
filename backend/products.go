@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -51,7 +52,7 @@ func (a *App) listProducts(w http.ResponseWriter, r *http.Request) error {
 		add("p.style = ?", v)
 	}
 	if v := qs.Get("colour"); v != "" {
-		add("p.colour = ?", v)
+		add("(p.colour = ? OR EXISTS (SELECT 1 FROM product_colours pc WHERE pc.product_id = p.id AND pc.name = ?))", v, v)
 	}
 	if qs.Get("inStock") != "" {
 		add("p.stock > 0")
@@ -133,7 +134,11 @@ const math32 = 1<<31 - 1
 func (a *App) productFilters(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	distinct := func(col string) ([]string, error) {
-		rows, err := a.db.QueryContext(ctx, `SELECT DISTINCT `+col+` FROM products WHERE is_active = 1 AND `+col+` IS NOT NULL AND `+col+` <> '' ORDER BY `+col)
+		query := `SELECT DISTINCT ` + col + ` FROM products WHERE is_active = 1 AND ` + col + ` IS NOT NULL AND ` + col + ` <> ''`
+		if col == "colour" { // also the colours pieces come in
+			query += ` UNION SELECT pc.name FROM product_colours pc JOIN products p ON p.id = pc.product_id WHERE p.is_active = 1`
+		}
+		rows, err := a.db.QueryContext(ctx, query+` ORDER BY 1`)
 		if err != nil {
 			return nil, err
 		}
@@ -215,6 +220,12 @@ type productInput struct {
 	code  string
 	name  string
 	sizes *[]Size // nil when the form didn't send sizes; empty removes them
+	// Colours work the same way. With colours and sizes, variants hold the stock of each pair.
+	colours  *[]Colour
+	variants []Variant
+	// Photo colour tags: existing photos by id, and new photos in upload order.
+	imageColours    map[string]string
+	newImageColours []string
 }
 
 // readProductForm validates the product fields that were sent. When partial is false
@@ -393,17 +404,148 @@ func readProductForm(r *http.Request, partial bool) (*productInput, error) {
 		}
 		in.sizes = &sizes
 		if len(sizes) > 0 {
-			for i, c := range in.set {
-				if c == "stock" {
-					in.args[i] = total
-				}
-			}
-			if !slices.Contains(in.set, "stock") {
-				field("stock", total)
-			}
+			setStock(in, total)
 		}
 	}
+
+	// Colours arrive as JSON: [{"name": "Rose gold", "hex": "#b76e79", "stock": 2}, ...].
+	if v, has := get("colours"); has {
+		var raw []struct {
+			Name  string  `json:"name"`
+			Hex   string  `json:"hex"`
+			Stock float64 `json:"stock"`
+		}
+		if json.Unmarshal([]byte(v), &raw) != nil || len(raw) > 20 {
+			return nil, badField("colours", "Check the colours")
+		}
+		colours := []Colour{}
+		seen := map[string]bool{}
+		total := 0
+		for _, x := range raw {
+			x.Name = strings.TrimSpace(x.Name)
+			if x.Name == "" || len([]rune(x.Name)) > 30 || seen[strings.ToLower(x.Name)] {
+				return nil, badField("colours", "Each colour needs a different name, like Rose gold")
+			}
+			if !hexRe.MatchString(x.Hex) {
+				return nil, badField("colours", "Pick a swatch colour for "+x.Name)
+			}
+			if !isInt(x.Stock) || x.Stock < 0 {
+				return nil, badField("colours", "Enter a stock of 0 or more for "+x.Name)
+			}
+			seen[strings.ToLower(x.Name)] = true
+			total += int(x.Stock)
+			colours = append(colours, Colour{Name: x.Name, Hex: strings.ToLower(x.Hex), Stock: int(x.Stock)})
+		}
+		in.colours = &colours
+
+		// Stock per colour and size: [{"colour": "Gold", "size": "2.4", "stock": 3}, ...]
+		sizes := []Size{}
+		if in.sizes != nil {
+			sizes = *in.sizes
+		}
+		if len(colours) > 0 && len(sizes) > 0 {
+			var rawV []struct {
+				Colour string  `json:"colour"`
+				Size   string  `json:"size"`
+				Stock  float64 `json:"stock"`
+			}
+			if v, has := get("variants"); has && json.Unmarshal([]byte(v), &rawV) != nil {
+				return nil, badField("variants", "Check the stock for each colour and size")
+			}
+			perSize, perColour := map[string]int{}, map[string]int{}
+			total = 0
+			for _, x := range rawV {
+				if !seen[strings.ToLower(x.Colour)] || !slices.ContainsFunc(sizes, func(sz Size) bool { return sz.Size == x.Size }) {
+					continue // a colour or size that was just removed
+				}
+				if !isInt(x.Stock) || x.Stock < 0 {
+					return nil, badField("variants", "Enter a stock of 0 or more for "+x.Colour+" "+x.Size)
+				}
+				n := int(x.Stock)
+				in.variants = append(in.variants, Variant{Colour: x.Colour, Size: x.Size, Stock: n})
+				perSize[x.Size] += n
+				perColour[x.Colour] += n
+				total += n
+			}
+			for i := range sizes {
+				sizes[i].Stock = perSize[sizes[i].Size]
+			}
+			for i := range colours {
+				colours[i].Stock = perColour[colours[i].Name]
+			}
+		}
+		if len(colours) > 0 {
+			setStock(in, total)
+		}
+	}
+	if v, has := get("imageColours"); has && json.Unmarshal([]byte(v), &in.imageColours) != nil {
+		return nil, badField("imageColours", "")
+	}
+	if v, has := get("newImageColours"); has && json.Unmarshal([]byte(v), &in.newImageColours) != nil {
+		return nil, badField("newImageColours", "")
+	}
 	return in, nil
+}
+
+var hexRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+func setStock(in *productInput, total int) {
+	for i, c := range in.set {
+		if c == "stock" {
+			in.args[i] = total
+			return
+		}
+	}
+	in.set, in.args = append(in.set, "stock"), append(in.args, total)
+}
+
+// saveOptions stores sizes, colours, colour and size stock, and photo colour tags.
+func saveOptions(ctx context.Context, tx *sql.Tx, productID string, in *productInput) error {
+	if in.sizes != nil {
+		if err := saveSizes(ctx, tx, productID, *in.sizes); err != nil {
+			return err
+		}
+	}
+	if in.colours != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM product_colours WHERE product_id = ?`, productID); err != nil {
+			return err
+		}
+		for i, c := range *in.colours {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO product_colours (id, product_id, name, hex, stock, sort) VALUES (?, ?, ?, ?, ?, ?)`,
+				newID(), productID, c.Name, c.Hex, c.Stock, i); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM product_variants WHERE product_id = ?`, productID); err != nil {
+			return err
+		}
+		for _, v := range in.variants {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO product_variants (product_id, colour, size, stock) VALUES (?, ?, ?, ?)`, productID, v.Colour, v.Size, v.Stock); err != nil {
+				return err
+			}
+		}
+		// Photos tagged with a colour that no longer exists go back to "any colour".
+		names := []any{productID}
+		for _, c := range *in.colours {
+			names = append(names, c.Name)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE product_images SET colour = '' WHERE product_id = ? AND colour NOT IN (`+placeholders(len(names)-1)+`)`, names...); err != nil {
+			return err
+		}
+	}
+	for imgID, colour := range in.imageColours {
+		if _, err := tx.ExecContext(ctx, `UPDATE product_images SET colour = ? WHERE id = ? AND product_id = ?`, strings.TrimSpace(colour), imgID, productID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (in *productInput) newImageColour(i int) string {
+	if i < len(in.newImageColours) {
+		return strings.TrimSpace(in.newImageColours[i])
+	}
+	return ""
 }
 
 // saveSizes replaces a product's sizes.
@@ -475,13 +617,11 @@ func (a *App) createProduct(w http.ResponseWriter, r *http.Request) error {
 		if _, err := tx.ExecContext(r.Context(), `INSERT INTO products (`+strings.Join(cols, ", ")+`) VALUES (`+placeholders(len(cols))+`)`, args...); err != nil {
 			return err
 		}
-		if in.sizes != nil {
-			if err := saveSizes(r.Context(), tx, id, *in.sizes); err != nil {
-				return err
-			}
+		if err := saveOptions(r.Context(), tx, id, in); err != nil {
+			return err
 		}
 		for i, url := range urls {
-			if _, err := tx.ExecContext(r.Context(), `INSERT INTO product_images (id, url, sort, product_id) VALUES (?, ?, ?, ?)`, newID(), url, i, id); err != nil {
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO product_images (id, url, sort, product_id, colour) VALUES (?, ?, ?, ?, ?)`, newID(), url, i, id, in.newImageColour(i)); err != nil {
 				return err
 			}
 		}
@@ -538,17 +678,15 @@ func (a *App) updateProduct(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		if in.sizes != nil {
-			if err := saveSizes(r.Context(), tx, id, *in.sizes); err != nil {
-				return err
-			}
+		if err := saveOptions(r.Context(), tx, id, in); err != nil {
+			return err
 		}
 		var start int
 		if err := tx.QueryRowContext(r.Context(), `SELECT COALESCE(MAX(sort), -1) + 1 FROM product_images WHERE product_id = ?`, id).Scan(&start); err != nil {
 			return err
 		}
 		for i, url := range urls {
-			if _, err := tx.ExecContext(r.Context(), `INSERT INTO product_images (id, url, sort, product_id) VALUES (?, ?, ?, ?)`, newID(), url, start+i, id); err != nil {
+			if _, err := tx.ExecContext(r.Context(), `INSERT INTO product_images (id, url, sort, product_id, colour) VALUES (?, ?, ?, ?, ?)`, newID(), url, start+i, id, in.newImageColour(i)); err != nil {
 				return err
 			}
 		}

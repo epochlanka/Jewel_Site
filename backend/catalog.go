@@ -9,9 +9,25 @@ import (
 var jewelleryTypes = []string{"EARRINGS", "NECKLACE", "CHAIN", "LONG_CHAIN", "BANGLE", "BRACELET", "RING", "ANKLET", "HAIR", "OTHER"}
 
 type Image struct {
-	ID   string `json:"id"`
-	URL  string `json:"url"`
-	Sort int    `json:"sort"`
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Sort   int    `json:"sort"`
+	Colour string `json:"colour"` // the colour this photo shows, or "" for any
+}
+
+type Colour struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Hex   string `json:"hex"`
+	Stock int    `json:"stock"` // when the piece has sizes, the total of this colour's sizes
+	Image string `json:"image"` // first photo of this colour, for swatches on product cards
+}
+
+// Variant is the stock of one colour in one size.
+type Variant struct {
+	Colour string `json:"colour"`
+	Size   string `json:"size"`
+	Stock  int    `json:"stock"`
 }
 
 type CategoryCount struct {
@@ -56,6 +72,8 @@ type Product struct {
 	RentDeposit   int       `json:"rentDeposit"`  // refundable
 	RentUnits     int       `json:"rentUnits"`    // identical sets that can be out at once
 	Sizes         []Size    `json:"sizes"`
+	Colours       []Colour  `json:"colours"`
+	Variants      []Variant `json:"variants"`
 	Images        []Image   `json:"images"`
 	Category      *Category `json:"category,omitempty"`
 	Pricing
@@ -81,7 +99,7 @@ func scanProduct(sc interface{ Scan(...any) error }) (Product, error) {
 		&style, &colour, &p.JewelleryType, &p.CategoryID, &p.CreatedAt,
 		&p.ForSale, &p.ForRent, &p.RentPrice, &p.RentDays, &p.RentExtraDay, &p.RentDeposit, &p.RentUnits)
 	p.Description, p.Style, p.Colour = strPtr(desc), strPtr(style), strPtr(colour)
-	p.Images, p.Sizes = []Image{}, []Size{}
+	p.Images, p.Sizes, p.Colours, p.Variants = []Image{}, []Size{}, []Colour{}, []Variant{}
 	return p, err
 }
 
@@ -104,7 +122,10 @@ func queryProducts(ctx context.Context, q querier, query string, args ...any) ([
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return out, attachSizes(ctx, q, out)
+	if err := attachSizes(ctx, q, out); err != nil {
+		return nil, err
+	}
+	return out, attachColours(ctx, q, out)
 }
 
 func attachSizes(ctx context.Context, q querier, list []Product) error {
@@ -146,7 +167,7 @@ func attachImages(ctx context.Context, q querier, list []Product, firstOnly bool
 	for i, p := range list {
 		ids[i] = p.ID
 	}
-	rows, err := q.QueryContext(ctx, `SELECT id, url, sort, product_id FROM product_images WHERE product_id IN (`+placeholders(len(ids))+`) ORDER BY sort, id`, toAny(ids)...)
+	rows, err := q.QueryContext(ctx, `SELECT id, url, sort, colour, product_id FROM product_images WHERE product_id IN (`+placeholders(len(ids))+`) ORDER BY sort, id`, toAny(ids)...)
 	if err != nil {
 		return err
 	}
@@ -155,7 +176,7 @@ func attachImages(ctx context.Context, q querier, list []Product, firstOnly bool
 	for rows.Next() {
 		var im Image
 		var pid string
-		if err := rows.Scan(&im.ID, &im.URL, &im.Sort, &pid); err != nil {
+		if err := rows.Scan(&im.ID, &im.URL, &im.Sort, &im.Colour, &pid); err != nil {
 			return err
 		}
 		if firstOnly && len(byProduct[pid]) > 0 {
@@ -327,4 +348,142 @@ func deliveryFeeFor(s Settings, subtotal int) int {
 		return 0
 	}
 	return s.DeliveryFee
+}
+
+// attachColours adds each product's colours (with the first photo of each) and,
+// for pieces with colours and sizes, the stock of every colour and size pair.
+func attachColours(ctx context.Context, q querier, list []Product) error {
+	if len(list) == 0 {
+		return nil
+	}
+	ids := make([]string, len(list))
+	index := map[string]*Product{}
+	for i := range list {
+		ids[i] = list[i].ID
+		index[list[i].ID] = &list[i]
+	}
+	rows, err := q.QueryContext(ctx, `SELECT c.id, c.name, c.hex, c.stock, c.product_id,
+	  COALESCE((SELECT pi.url FROM product_images pi WHERE pi.product_id = c.product_id AND pi.colour = c.name ORDER BY pi.sort, pi.id LIMIT 1), '')
+	  FROM product_colours c WHERE c.product_id IN (`+placeholders(len(ids))+`) ORDER BY c.sort, c.id`, toAny(ids)...)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var c Colour
+		var pid string
+		if err := rows.Scan(&c.ID, &c.Name, &c.Hex, &c.Stock, &pid, &c.Image); err != nil {
+			rows.Close()
+			return err
+		}
+		index[pid].Colours = append(index[pid].Colours, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows, err = q.QueryContext(ctx, `SELECT product_id, colour, size, stock FROM product_variants WHERE product_id IN (`+placeholders(len(ids))+`)`, toAny(ids)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v Variant
+		var pid string
+		if err := rows.Scan(&pid, &v.Colour, &v.Size, &v.Stock); err != nil {
+			return err
+		}
+		index[pid].Variants = append(index[pid].Variants, v)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// With sizes too, a colour's stock is the total over its sizes.
+	for i := range list {
+		p := &list[i]
+		if len(p.Colours) == 0 || len(p.Sizes) == 0 {
+			continue
+		}
+		for j := range p.Colours {
+			p.Colours[j].Stock = 0
+			for _, v := range p.Variants {
+				if v.Colour == p.Colours[j].Name {
+					p.Colours[j].Stock += v.Stock
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// stockOf is how many of a piece can be bought in a colour and size. ok is false when
+// the choice doesn't exist (a colour or size it doesn't come in, or a missing choice).
+func stockOf(p Product, colour, size string) (n int, ok bool) {
+	hasC, hasS := len(p.Colours) > 0, len(p.Sizes) > 0
+	if hasC != (colour != "") || hasS != (size != "") {
+		return 0, false
+	}
+	switch {
+	case hasC && hasS:
+		for _, v := range p.Variants {
+			if v.Colour == colour && v.Size == size {
+				return v.Stock, true
+			}
+		}
+		for _, c := range p.Colours { // a pair with no stock row yet has 0
+			if c.Name == colour {
+				for _, sz := range p.Sizes {
+					if sz.Size == size {
+						return 0, true
+					}
+				}
+			}
+		}
+		return 0, false
+	case hasC:
+		for _, c := range p.Colours {
+			if c.Name == colour {
+				return c.Stock, true
+			}
+		}
+		return 0, false
+	case hasS:
+		for _, sz := range p.Sizes {
+			if sz.Size == size {
+				return sz.Stock, true
+			}
+		}
+		return 0, false
+	}
+	return p.Stock, true
+}
+
+// takeStock moves stock for a purchase: n < 0 takes it (checking there is enough), n > 0 returns it.
+// It returns false when there wasn't enough.
+func takeStock(ctx context.Context, tx *sql.Tx, p Product, colour, size string, n int) (bool, error) {
+	run := func(query string, args ...any) (bool, error) {
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return false, err
+		}
+		rows, _ := res.RowsAffected()
+		return rows > 0, nil
+	}
+	if ok, err := run(`UPDATE products SET stock = stock + ? WHERE id = ? AND stock + ? >= 0`, n, p.ID, n); !ok || err != nil {
+		return false, err
+	}
+	hasC, hasS := len(p.Colours) > 0, len(p.Sizes) > 0
+	switch {
+	case hasC && hasS:
+		if n > 0 { // returning stock to a pair that may have no row
+			_, err := tx.ExecContext(ctx, `INSERT INTO product_variants (product_id, colour, size, stock) VALUES (?, ?, ?, ?)
+			  ON CONFLICT (product_id, colour, size) DO UPDATE SET stock = stock + excluded.stock`, p.ID, colour, size, n)
+			return err == nil, err
+		}
+		return run(`UPDATE product_variants SET stock = stock + ? WHERE product_id = ? AND colour = ? AND size = ? AND stock + ? >= 0`, n, p.ID, colour, size, n)
+	case hasC:
+		return run(`UPDATE product_colours SET stock = stock + ? WHERE product_id = ? AND name = ? AND stock + ? >= 0`, n, p.ID, colour, n)
+	case hasS:
+		return run(`UPDATE product_sizes SET stock = stock + ? WHERE product_id = ? AND size = ? AND stock + ? >= 0`, n, p.ID, size, n)
+	}
+	return true, nil
 }

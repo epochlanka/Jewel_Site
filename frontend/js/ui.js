@@ -128,7 +128,8 @@ export const dayLabel = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("en-
 // What an order or cart line is: the size, or the rental dates.
 export function lineDetail(l) {
   if (l.kind === "RENT" && l.rentFrom) return html`<span class="line-tag line-tag-rent">${icon("clock", 13)}Rent ${dayLabel(l.rentFrom)} to ${dayLabel(l.rentTo)}</span>`;
-  if (l.size) return html`<span class="line-tag">Size ${l.size}</span>`;
+  const parts = [l.colour, l.size && `Size ${l.size}`].filter(Boolean);
+  if (parts.length) return html`<span class="line-tag">${parts.join(" · ")}</span>`;
   return "";
 }
 
@@ -140,7 +141,8 @@ export function productCard(p) {
   const saved = state.wishIds.has(p.id);
   const rentOnly = p.forRent && !p.forSale;
   const soldOut = !rentOnly && p.stock <= 0;
-  const sized = p.sizes?.length > 0;
+  const sized = p.sizes?.length > 0 || p.colours?.length > 0;
+  const colours = p.colours ?? [];
   return html`<article class="pcard ${soldOut ? "is-soldout" : ""}">
     <div class="pcard-media">
       <a href="/product/${p.slug}" class="pcard-link" tabindex="-1" aria-hidden="true">${productImage(p.images[0]?.url, p.name, { type: p.jewelleryType })}</a>
@@ -151,11 +153,14 @@ export function productCard(p) {
       <div class="pcard-meta"><span>${p.code}</span>${p.forRent && html`<span class="pcard-rent">${rentOnly ? "For rent" : "Also for rent"}</span>`}${p.isNewArrival && !soldOut && !p.forRent && html`<span class="pcard-new">New</span>`}</div>
       <h3 class="pcard-name"><a href="/product/${p.slug}">${p.name}</a></h3>
       ${rentOnly ? rentPrice(p) : price(p.price, p)}
-      ${sized && !rentOnly && html`<span class="pcard-sizes">Sizes ${p.sizes.map((s) => s.size).join(", ")}</span>`}
+      ${colours.length > 0 && html`<div class="pcard-swatches" role="group" aria-label="Colours">${colours.slice(0, 6).map((c) => html`
+        <button type="button" class="swatch swatch-sm" style="--swatch: ${c.hex}" title="${c.name}" aria-label="Show ${c.name}" data-card-colour="${c.image}"></button>`)}
+        ${colours.length > 6 && html`<span class="muted" style="font-size: 12px">+${colours.length - 6}</span>`}</div>`}
+      ${p.sizes?.length > 0 && !rentOnly && html`<span class="pcard-sizes">Sizes ${p.sizes.map((s) => s.size).join(", ")}</span>`}
     </div>
     <div class="pcard-actions">
       ${rentOnly ? html`<a href="/product/${p.slug}" class="btn btn-primary btn-sm pcard-add">${icon("clock", 16)}Book rental</a>`
-        : sized && !soldOut ? html`<a href="/product/${p.slug}" class="btn btn-primary btn-sm pcard-add">Choose size</a>`
+        : sized && !soldOut ? html`<a href="/product/${p.slug}" class="btn btn-primary btn-sm pcard-add">${p.colours?.length ? "Choose options" : "Choose size"}</a>`
         : html`<button class="btn btn-primary btn-sm pcard-add" data-add-to-cart="${p.id}" data-name="${p.name}"${attr("disabled", soldOut)}>${soldOut ? "Sold out" : "Add to cart"}</button>`}
     </div>
   </article>`;
